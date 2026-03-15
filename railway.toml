@@ -1,6 +1,7 @@
 # Railway 配置文件
 [build]
   dockerfile = false
+  builder = "NIXPACKS"
 
 [env]
   JWT_SECRET = { generated = true, from = "secret" }
@@ -9,6 +10,7 @@
 
 [deploy]
   domain = "secure-chat"
+  startCommand = "node server.js"
 
 # ✅ 正确：healthcheck 作为顶级表（与 deploy 同级）
 [healthcheck]
