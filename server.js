@@ -21,7 +21,6 @@ const SALT_ROUNDS = 10;
 const SALT = process.env.SALT || 'MySuperSecretSalt_9876';
 
 // ==================== 数据库连接 ====================
-const { Pool } = require('pg');
 let pool;
 
 function createPool() {
