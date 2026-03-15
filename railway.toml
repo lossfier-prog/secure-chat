@@ -13,3 +13,13 @@
 
 [deploy]
   domain = "secure-chat"
+  [healthcheck]
+  endpoint = "/health"
+  interval = 15
+  timeout = 3
+  retries = 2
+  grace_period = 5
+
+[ports]
+  http = 8080  # 必须与你的监听端口匹配！
+  expose = true
