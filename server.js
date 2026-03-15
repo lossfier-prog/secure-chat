@@ -41,7 +41,12 @@ app.use((req, res, next) => {
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-123';
 const SALT_ROUNDS = 10;
-
+/**
+ * 生成唯一房间号 (8位字母+数字)
+ */
+function generateRoomId() {
+  return Math.random().toString(36).substring(2, 10).toUpperCase();
+}
 // ======== 5. 数据库连接 ========
 let pool = null;
 
@@ -77,7 +82,48 @@ app.get('/health', (req, res) => {
     port: PORT
   });
 });
+// ======================================================
+// 中间件：验证 JWT 并解析用户
+// ======================================================
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: '未授权' });
 
+  const token = authHeader.split(' ')[1];
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: '无效令牌' });
+    req.user = user;          // 挂载用户资料到 req 上
+    next();
+  });
+};
+
+// 中间件：仅管理员可访问
+const adminOnly = (req, res, next) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: '需要管理员权限' });
+  }
+  next();
+};
+
+// 中间件：仅房间所有者可访问
+const roomOwnerOnly = async (req, res, next) => {
+  const roomId = req.params.roomId;           // 从 URL 获取房间ID
+  if (!roomId) return res.status(400).json({ error: '缺少房间ID' });
+
+  const db = getPool();
+  const room = await db.query('SELECT owner_id FROM rooms WHERE id = $1', [roomId]);
+  
+  if (room.rows.length === 0) {
+    return res.status(404).json({ error: '房间不存在' });
+  }
+  
+  // 当前用户是否是该房间所有者？
+  if (room.rows[0].owner_id !== req.user.userId) {
+    return res.status(403).json({ error: '只有房间所有者可操作' });
+  }
+  
+  next();
+};
 // ======== 7. API 路由 ========
 
 // 注册
@@ -198,29 +244,41 @@ app.get('/my-applications', async (req, res) => {
   res.json([]);
 });
 
-// 管理员路由
-app.get('/admin/invite-codes', async (req, res) => {
+// ======================================================
+// 管理员路由 — 仅管理员可访问！
+// ======================================================
+
+// 获取所有邀请码列表
+app.get('/admin/invite-codes', authenticateToken, adminOnly, async (req, res) => {
   console.log('🛡️ 获取邀请码列表');
-  res.json([]);
+  try {
+    const db = getPool();
+    const result = await db.query('SELECT id, code, used, created_at FROM invite_codes');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ 获取邀请码错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/admin/generate-invite', async (req, res) => {
+// 生成新邀请码（仅管理员）
+app.post('/admin/generate-invite', authenticateToken, adminOnly, async (req, res) => {
   console.log('🛡️ 生成邀请码');
-  const code = Math.random().toString(36).substring(2, 10).toUpperCase();
-  res.json({ inviteCode: code });
+  try {
+    const db = getPool();
+    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+
+    await db.query(
+      'INSERT INTO invite_codes (code) VALUES ($1)',
+      [code]
+    );
+
+    res.json({ inviteCode: code });
+  } catch (err) {
+    console.error('❌ 生成邀请码错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
-
-// ======== 8. 静态文件服务 ========
-const publicPath = path.join(__dirname, 'public');
-console.log(`📁 静态文件路径: ${publicPath}`);
-
-if (fs.existsSync(publicPath)) {
-  app.use(express.static(publicPath));
-  console.log('✅ 静态文件目录存在');
-} else {
-  console.warn('⚠️ 静态文件目录不存在，将自动创建');
-  fs.mkdirSync(publicPath, { recursive: true });
-}
 
 // ======== 9. SPA 回退路由（必须在最后！） ========
 app.get('*', (req, res) => {
@@ -243,7 +301,42 @@ app.get('*', (req, res) => {
     `);
   }
 });
+// ======================================================
+// 房间管理 — 认证后可用
+// ======================================================
 
+// 创建新房间
+app.post('/rooms', authenticateToken, async (req, res) => {
+  console.log(`🏠 用户 ${req.user.username} 创建房间`);
+  try {
+    const db = getPool();
+    const roomId = generateRoomId();   // 生成唯一房间号
+
+    const result = await db.query(
+      `INSERT INTO rooms (room_id, owner_id) 
+       VALUES ($1, $2) 
+       RETURNING id, room_id`,
+      [roomId, req.user.userId]
+    );
+
+    // 自动将创建者加入房间成员
+    await db.query(
+      `INSERT INTO room_members (room_id, user_id) 
+       VALUES ($1, $2)`,
+      [result.rows[0].id, req.user.userId]
+    );
+
+    res.json({
+      id: result.rows[0].id,
+      roomId: result.rows[0].room_id,
+      message: "房间创建成功！其他用户可用该房间号申请加入。"
+    });
+
+  } catch (err) {
+    console.error('❌ 创建房间错误:', err.message);
+    res.status(500).json({ error: '创建房间失败: ' + err.message });
+  }
+});
 // ======== 10. 错误处理 ========
 app.use((err, req, res, next) => {
   console.error('💥 服务器错误:', err.message);
@@ -251,7 +344,162 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: '服务器内部错误' });
   }
 });
+// 申请加入某个房间
+app.post('/rooms/:roomId/join', authenticateToken, async (req, res) => {
+  console.log(`📩 用户 ${req.user.username} 申请加入房间 ${req.params.roomId}`);
+  try {
+    const db = getPool();
+    const { roomId } = req.params;
 
+    // 1. 检查房间是否存在
+    const room = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (room.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在！' });
+    }
+    const roomDbId = room.rows[0].id;
+
+    // 2. 避免重复申请
+    const existApp = await db.query(
+      `SELECT id FROM applications 
+       WHERE room_id = $1 AND applicant_id = $2 AND status = 'pending'`,
+      [roomDbId, req.user.userId]
+    );
+    if (existApp.rows.length > 0) {
+      return res.status(400).json({ error: '您已提交申请，请耐心等待审核' });
+    }
+
+    // 3. 创建申请记录
+    await db.query(
+      `INSERT INTO applications (room_id, applicant_id) 
+       VALUES ($1, $2)`,
+      [roomDbId, req.user.userId]
+    );
+
+    res.json({ message: '申请已提交！房间所有者会尽快审核。' });
+
+  } catch (err) {
+    console.error('❌ 申请加入错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// 获取该房间的所有 pending 申请 （仅房间所有者）
+app.get('/rooms/:roomId/applications', 
+  authenticateToken, 
+  roomOwnerOnly, 
+  async (req, res) => 
+{
+  console.log(`📋 房间 ${req.params.roomId} 申请列表`);
+  try {
+    const db = getPool();
+    const applications = await db.query(`
+      SELECT 
+        a.id, 
+        a.status,
+        u.id AS user_id,
+        u.username
+      FROM applications a
+      JOIN users u ON a.applicant_id = u.id
+      WHERE a.room_id = $1 AND a.status = 'pending'
+      ORDER BY a.created_at DESC
+    `, [req.params.roomId]);
+
+    res.json(applications.rows);
+  } catch (err) {
+    console.error('❌ 获取申请列表错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// 批准某条申请
+app.post('/applications/:appId/approve', 
+  authenticateToken, 
+  async (req, res) => 
+{
+  console.log(`✅ 批准申请 ${req.params.appId}`);
+  try {
+    const db = getPool();
+    const { appId } = req.params;
+
+    // 1. 获取申请详情
+    const app = await db.query(
+      `SELECT room_id, applicant_id 
+       FROM applications 
+       WHERE id = $1 AND status = 'pending'`,
+      [appId]
+    );
+    
+    if (app.rows.length === 0) {
+      return res.status(404).json({ error: '申请不存在或已处理' });
+    }
+
+    const { room_id, applicant_id } = app.rows[0];
+
+    // 2. 验证操作者是房间所有者
+    const room = await db.query('SELECT owner_id FROM rooms WHERE id = $1', [room_id]);
+    if (room.rows[0].owner_id !== req.user.userId) {
+      return res.status(403).json({ error: '无权操作该申请！' });
+    }
+
+    // 3. 更新申请状态 + 加入房间成员
+    await db.query('BEGIN');
+    await db.query(
+      `UPDATE applications SET status = 'approved' WHERE id = $1`,
+      [appId]
+    );
+    await db.query(
+      `INSERT INTO room_members (room_id, user_id) 
+       VALUES ($1, $2) 
+       ON CONFLICT DO NOTHING`,   // 避免重复加入
+      [room_id, applicant_id]
+    );
+    await db.query('COMMIT');
+
+    res.json({ message: '申请已批准，用户已加入房间！' });
+
+  } catch (err) {
+    await db.query('ROLLBACK');
+    console.error('❌ 批准申请错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// 拒绝某条申请
+app.post('/applications/:appId/reject', 
+  authenticateToken, 
+  async (req, res) => 
+{
+  console.log(`❌ 拒绝申请 ${req.params.appId}`);
+  try {
+    const db = getPool();
+    const { appId } = req.params;
+
+    // 检查申请是否存在且为 pending
+    const app = await db.query(
+      `SELECT room_id FROM applications 
+       WHERE id = $1 AND status = 'pending'`,
+      [appId]
+    );
+    
+    if (app.rows.length === 0) {
+      return res.status(404).json({ error: '申请不存在或已处理' });
+    }
+
+    // 验证操作者是房间所有者
+    const room = await db.query('SELECT owner_id FROM rooms WHERE id = $1', [app.rows[0].room_id]);
+    if (room.rows[0].owner_id !== req.user.userId) {
+      return res.status(403).json({ error: '无权操作该申请！' });
+    }
+
+    await db.query(
+      `UPDATE applications SET status = 'rejected' WHERE id = $1`,
+      [appId]
+    );
+
+    res.json({ message: '申请已拒绝' });
+
+  } catch (err) {
+    console.error('❌ 拒绝申请错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 // ======== 11. 创建 HTTP 服务器 ========
 const server = http.createServer(app);
 
@@ -328,7 +576,24 @@ async function initDatabase() {
       )
     `);
     console.log('   • applications 表就绪');
-    
+
+    // 房间成员表 —— 记录谁在哪个房间
+  await db.query(`
+  CREATE TABLE IF NOT EXISTS room_members (
+    id SERIAL PRIMARY KEY,
+    room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (room_id, user_id)   -- 同一用户不可重复加入同一个房间
+  )
+`);
+console.log('   • room_members 表就绪');
+
+// 申请表 —— 已存在，但确保有 status 字段
+await db.query(`
+  ALTER TABLE applications 
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
+`);
     console.log('✅ 数据库初始化完成');
     return true;
   } catch (err) {
