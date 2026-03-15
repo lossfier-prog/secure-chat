@@ -580,19 +580,21 @@ body
 
     function connectWebSocket() {
       if (ws) {
-        ws.close();
-      }
+    ws.close();
+  }
 
-      const protocol = window.location.protocol === 'https'  'wss'  'ws';
-      const host = window.location.host;
-      
-      ws = new WebSocket(`${protocol}${host}token=${token}`);
+  // 修复：使用当前页面的完整 URL 作为 WebSocket 地址
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}?token=${token}`;
+  
+  console.log('尝试连接 WebSocket:', wsUrl); // 调试用
+  ws = new WebSocket(wsUrl);
 
-      ws.onopen = () = {
-        console.log('WebSocket 连接成功');
-        messageInput.disabled = false;
-        sendBtn.disabled = false;
-      };
+  ws.onopen = () => {
+    console.log('WebSocket 连接成功');
+    messageInput.disabled = false;
+    sendBtn.disabled = false;
+  };
 
       ws.onmessage = (event) = {
         const data = JSON.parse(event.data);
