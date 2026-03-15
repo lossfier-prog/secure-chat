@@ -1,0 +1,848 @@
+!DOCTYPE html
+html lang=zh
+head
+  meta charset=UTF-8
+  meta name=viewport content=width=device-width, initial-scale=1.0
+  title安全聊天室title
+  style
+    body { 
+      font-family 'Microsoft YaHei', 'Segoe UI', sans-serif; 
+      max-width 600px; 
+      margin 20px auto; 
+      padding 0 15px;
+      background #f9f9f9;
+      color #333;
+    }
+    
+    .container {
+      background white;
+      border-radius 12px;
+      box-shadow 0 2px 15px rgba(0,0,0,0.08);
+      padding 20px;
+    }
+
+    h1 {
+      text-align center;
+      color #2c3e50;
+      margin-bottom 5px;
+    }
+
+    .subtitle {
+      text-align center;
+      color #7f8c8d;
+      font-size 14px;
+      margin-bottom 25px;
+    }
+
+    .card {
+      background #f8f9fa;
+      border-radius 10px;
+      padding 15px;
+      margin-bottom 20px;
+      border 1px solid #e9ecef;
+    }
+
+    input, button {
+      padding 10px 12px;
+      margin 8px 0;
+      border 1px solid #ddd;
+      border-radius 6px;
+      width 100%;
+      box-sizing border-box;
+      font-size 14px;
+    }
+
+    button {
+      background #3498db;
+      color white;
+      border none;
+      cursor pointer;
+      font-weight 500;
+      transition background 0.3s;
+    }
+
+    buttonhover {
+      background #2980b9;
+    }
+
+    buttondisabled {
+      background #bdc3c7;
+      cursor not-allowed;
+    }
+
+    .error {
+      color #e74c3c;
+      font-size 13px;
+      margin 5px 0;
+      min-height 18px;
+    }
+
+    #chatBox {
+      border 1px solid #e0e0e0;
+      height 280px;
+      overflow-y auto;
+      margin 15px 0;
+      padding 12px;
+      background #fcfcfc;
+      border-radius 8px;
+      font-size 14px;
+    }
+
+    .msg {
+      margin 8px 0;
+      line-height 1.4;
+    }
+
+    .system {
+      color #7f8c8d;
+      font-style italic;
+      text-align center;
+      font-size 12px;
+      margin 15px 0;
+    }
+
+    .user-msg {
+      background #e8f4fc;
+      padding 8px 12px;
+      border-radius 18px;
+      max-width 85%;
+      margin-left auto;
+    }
+
+    .other-msg {
+      background #f1f1f1;
+      padding 8px 12px;
+      border-radius 18px;
+      max-width 85%;
+    }
+
+    .hidden { display none; }
+
+    .room-item {
+      background white;
+      border 1px solid #e0e0e0;
+      border-radius 8px;
+      padding 12px;
+      margin 10px 0;
+      transition all 0.2s;
+    }
+
+    .room-itemhover {
+      transform translateY(-2px);
+      box-shadow 0 4px 8px rgba(0,0,0,0.05);
+    }
+
+    .room-id {
+      font-weight bold;
+      color #2c3e50;
+      margin-bottom 5px;
+    }
+
+    .room-meta {
+      display flex;
+      justify-content space-between;
+      align-items center;
+      font-size 12px;
+      color #7f8c8d;
+    }
+
+    .badge {
+      background #e74c3c;
+      color white;
+      padding 2px 8px;
+      border-radius 10px;
+      font-size 12px;
+    }
+
+    .btn-small {
+      padding 5px 10px;
+      font-size 13px;
+      background #2ecc71;
+      width auto;
+    }
+
+    .audit-item {
+      padding 12px;
+      border-bottom 1px solid #eee;
+    }
+
+    .audit-actions {
+      display flex;
+      gap 8px;
+      margin-top 8px;
+    }
+
+    .btn-approve {
+      background #2ecc71;
+      flex 1;
+    }
+
+    .btn-reject {
+      background #e74c3c;
+      flex 1;
+    }
+
+    .user-header {
+      display flex;
+      justify-content space-between;
+      align-items center;
+      margin-bottom 15px;
+      padding-bottom 10px;
+      border-bottom 1px solid #eee;
+    }
+
+    .logout-btn {
+      background #e74c3c;
+      padding 5px 12px;
+      font-size 13px;
+      width auto;
+    }
+
+    .nav-tabs {
+      display flex;
+      margin-bottom 15px;
+      border-bottom 1px solid #eee;
+    }
+
+    .nav-tab {
+      padding 8px 15px;
+      cursor pointer;
+      border-bottom 3px solid transparent;
+    }
+
+    .nav-tab.active {
+      border-bottom 3px solid #3498db;
+      color #3498db;
+      font-weight 500;
+    }
+
+    .tab-content { display none; }
+    .tab-content.active { display block; }
+    
+     管理员面板样式 
+    #adminPanel {
+      margin-top 15px;
+      padding 15px;
+      background #f0f7ff;
+      border 1px solid #d6e9ff;
+      border-radius 8px;
+    }
+    
+    #adminPanel h3 {
+      margin-top 0;
+      color #2c3e50;
+      display flex;
+      align-items center;
+      gap 8px;
+    }
+    
+    #adminPanel table {
+      width 100%;
+      border-collapse collapse;
+      margin-top 10px;
+    }
+    
+    #adminPanel th {
+      background #e3f2fd;
+      padding 8px;
+      text-align left;
+    }
+    
+    #adminPanel td {
+      padding 8px;
+      border-bottom 1px solid #eee;
+    }
+    
+    @media (max-width 480px) {
+      body { padding 10px; }
+      .container { padding 15px; }
+      input, button { padding 8px; }
+    }
+  style
+head
+body
+  div class=container
+    h1🔐 安全聊天室h1
+    p class=subtitle邀请码注册 · 房主审核 · 端到端加密p
+
+    !-- 认证区域 --
+    div id=authSection
+      div class=card
+        input type=text id=username placeholder=用户名
+        input type=password id=password placeholder=密码
+        
+        div id=inviteField
+          input type=text id=inviteCode placeholder=邀请码（注册时需要）
+        div
+
+        button onclick=register()注册button
+        button onclick=login()登录button
+        
+        div class=error id=authMsgdiv
+      div
+    div
+
+    !-- 聊天区域 --
+    div id=chatSection class=hidden
+      div class=user-header
+        div你好，strong id=currentUsernamestrong！div
+        button class=logout-btn onclick=logout()退出button
+      div
+
+      div class=nav-tabs
+        div class=nav-tab active data-tab=chat onclick=switchTab('chat')聊天div
+        div class=nav-tab data-tab=myRooms onclick=switchTab('myRooms')我的房间div
+        div class=nav-tab data-tab=audit onclick=switchTab('audit')审核中心div
+      div
+
+      !-- 聊天标签页 --
+      div id=chatTab class=tab-content active
+        div id=chatBoxdiv
+        
+        div
+          input type=text id=roomPassword placeholder=输入房间密码
+          button onclick=joinRoom()加入房间button
+        div
+
+        div style=margin-top 15px;
+          input type=text id=messageInput placeholder=输入消息... disabled
+          button onclick=sendMessage() id=sendBtn disabled发送button
+        div
+      div
+
+      !-- 我的房间标签页 --
+      div id=myRoomsTab class=tab-content
+        h3🏠 我创建的房间h3
+        div id=myRoomsList
+          !-- 房间列表将自动加载 --
+        div
+      div
+
+      !-- 审核中心标签页 --
+      div id=auditTab class=tab-content
+        h3📬 审核中心h3
+        div id=applicationsList
+          !-- 申请列表将自动加载 --
+        div
+      div
+      
+      !-- 管理员面板 --
+      div id=adminPanel class=hidden
+        h3🛡️ 管理员面板h3
+        
+        div
+          button onclick=generateInviteCode() class=btn style=background#9b59b6
+            ✨ 生成新邀请码
+          button
+          div id=newInviteCode style=margin10px 0; min-height24px; color#9b59b6; font-weightbold;div
+        div
+
+        h4 style=margin15px 0 10px;历史邀请码（最近50条）h4
+        div id=inviteCodesList style=max-height200px; overflow-yauto;div
+      div
+    div
+  div
+
+  script
+     ==================== 全局变量 ====================
+    let ws = null;
+    let token = localStorage.getItem('token');
+    let currentUsername = '';
+
+     DOM 元素
+    const authSection = document.getElementById('authSection');
+    const chatSection = document.getElementById('chatSection');
+    const authMsg = document.getElementById('authMsg');
+    const currentUsernameEl = document.getElementById('currentUsername');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+
+     ==================== 页面初始化 ====================
+    document.addEventListener('DOMContentLoaded', () = {
+      if (token) {
+         尝试自动登录
+        fetch('my-rooms', {
+          headers { 'Authorization' `Bearer ${token}` }
+        })
+        .then(res = {
+          if (res.ok) return res.json();
+          throw new Error('Token 无效');
+        })
+        .then(() = {
+           获取用户名
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          currentUsername = payload.username;
+          currentUsernameEl.textContent = currentUsername;
+          
+           检查管理员权限
+          checkAdminStatus();
+          
+          enterChat();
+        })
+        .catch(() = {
+          localStorage.removeItem('token');
+          token = null;
+        });
+      }
+    });
+
+     ==================== 认证功能 ====================
+
+    function register() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const inviteCode = document.getElementById('inviteCode').value.trim();
+
+      if (!username  !password  !inviteCode) {
+        showError('所有字段不能为空！');
+        return;
+      }
+
+      fetch('register', {
+        method 'POST',
+        headers { 'Content-Type' 'applicationjson' },
+        body JSON.stringify({ username, password, inviteCode })
+      })
+      .then(res = res.json())
+      .then(data = {
+        if (data.token) {
+          token = data.token;
+          localStorage.setItem('token', token);
+          
+           解析用户名
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          currentUsername = payload.username;
+          currentUsernameEl.textContent = currentUsername;
+          
+          enterChat();
+        } else {
+          showError(data.error  '注册失败');
+        }
+      })
+      .catch(() = showError('网络错误'));
+    }
+
+    function login() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+
+      if (!username  !password) {
+        showError('用户名密码不能为空！');
+        return;
+      }
+
+      fetch('login', {
+        method 'POST',
+        headers { 'Content-Type' 'applicationjson' },
+        body JSON.stringify({ username, password })
+      })
+      .then(res = res.json())
+      .then(data = {
+        if (data.token) {
+          token = data.token;
+          localStorage.setItem('token', token);
+          
+           解析用户名
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          currentUsername = payload.username;
+          currentUsernameEl.textContent = currentUsername;
+          
+           检查管理员权限
+          checkAdminStatus();
+          
+          enterChat();
+        } else {
+          showError(data.error  '登录失败');
+        }
+      })
+      .catch(() = showError('网络错误'));
+    }
+
+    function logout() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      
+      localStorage.removeItem('token');
+      token = null;
+      
+      chatSection.classList.add('hidden');
+      authSection.classList.remove('hidden');
+      
+       重置输入框
+      document.getElementById('username').value = '';
+      document.getElementById('password').value = '';
+      document.getElementById('inviteCode').value = '';
+      authMsg.textContent = '';
+      
+       隐藏管理员面板
+      document.getElementById('adminPanel').classList.add('hidden');
+    }
+
+    function showError(message) {
+      authMsg.textContent = message;
+      setTimeout(() = {
+        if (authMsg.textContent === message) {
+          authMsg.textContent = '';
+        }
+      }, 5000);
+    }
+
+     ==================== 管理员功能 ====================
+    function checkAdminStatus() {
+      fetch('admininvite-codes', {
+        headers { 'Authorization' `Bearer ${token}` }
+      })
+      .then(res = {
+        if (res.ok) {
+          document.getElementById('adminPanel').classList.remove('hidden');
+          loadInviteCodes();
+        }
+      })
+      .catch(() = {
+         非管理员，不显示面板
+      });
+    }
+
+     生成新邀请码
+    function generateInviteCode() {
+      fetch('admingenerate-invite', {
+        method 'POST',
+        headers { 'Authorization' `Bearer ${token}` }
+      })
+      .then(res = res.json())
+      .then(data = {
+        const el = document.getElementById('newInviteCode');
+        el.innerHTML = `新邀请码 span style=color#9b59b6; font-size18px;${data.inviteCode}span`;
+        setTimeout(() = el.innerHTML = '', 10000);  10秒后清除
+        loadInviteCodes();  刷新列表
+      })
+      .catch(err = {
+        console.error('生成邀请码错误', err);
+        showError('生成邀请码失败');
+      });
+    }
+
+     加载邀请码列表
+    function loadInviteCodes() {
+      fetch('admininvite-codes', {
+        headers { 'Authorization' `Bearer ${token}` }
+      })
+      .then(res = res.json())
+      .then(codes = {
+        let html = 'tabletrth邀请码thth状态thth创建时间thth使用人thtr';
+        
+        codes.forEach(code = {
+          const status = code.used  
+            `span style=color#27ae60;已使用span`  
+            `span style=color#e74c3c;未使用span`;
+          
+          html += `tr
+            td${code.code}td
+            td style=text-aligncenter;${status}td
+            td style=font-size12px;${formatDateTime(code.created_at)}td
+            td${code.used_by  '-'}td
+          tr`;
+        });
+        
+        html += 'table';
+        document.getElementById('inviteCodesList').innerHTML = html;
+      })
+      .catch(err = {
+        console.error('加载邀请码错误', err);
+      });
+    }
+
+     格式化日期时间
+    function formatDateTime(dateTimeStr) {
+      if (!dateTimeStr) return '';
+      
+      const date = new Date(dateTimeStr);
+      return `${date.getFullYear()}-${(date.getMonth()+1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}${date.getMinutes().toString().padStart(2, '0')}`;
+    }
+
+     ==================== 聊天功能 ====================
+
+    function enterChat() {
+      authSection.classList.add('hidden');
+      chatSection.classList.remove('hidden');
+      
+       加载我的房间
+      loadMyRooms();
+      
+       加载审核列表
+      loadApplications();
+
+       连接 WebSocket
+      connectWebSocket();
+    }
+
+    function connectWebSocket() {
+      if (ws) {
+    ws.close();
+  }
+
+  // 修复：使用当前页面的完整 URL 作为 WebSocket 地址
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}?token=${token}`;
+  
+  console.log('尝试连接 WebSocket:', wsUrl); // 调试用
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    console.log('WebSocket 连接成功');
+    messageInput.disabled = false;
+    sendBtn.disabled = false;
+  };
+
+      ws.onmessage = (event) = {
+        const data = JSON.parse(event.data);
+        const chatBox = document.getElementById('chatBox');
+
+        if (data.type === 'system') {
+          const msgDiv = document.createElement('div');
+          msgDiv.className = 'system';
+          msgDiv.textContent = data.text;
+          chatBox.appendChild(msgDiv);
+        } 
+        else if (data.type === 'msg') {
+          const msgDiv = document.createElement('div');
+          msgDiv.className = 'msg';
+          
+          if (data.sender === currentUsername) {
+            msgDiv.innerHTML = `div class=user-msg
+              strong你strong (${data.time})：br${data.text}
+            div`;
+          } else {
+            msgDiv.innerHTML = `div class=other-msg
+              strong${data.sender}strong (${data.time})：br${data.text}
+            div`;
+          }
+          
+          chatBox.appendChild(msgDiv);
+        }
+        else if (data.type === 'new_application') {
+           房主收到新申请通知
+          alert(`📩 有新申请！打开“审核中心”查看`);
+          loadApplications();
+        }
+        else if (data.type === 'application_approved') {
+           申请被批准
+          joinWsRoom(data.roomDbId);
+          addSystemMessage('✅ 你的申请已批准！已加入房间');
+        }
+        else if (data.type === 'application_rejected') {
+           申请被拒绝
+          addSystemMessage('❌ 你的申请已被拒绝');
+        }
+
+         自动滚动到底部
+        chatBox.scrollTop = chatBox.scrollHeight;
+      };
+
+      ws.onclose = () = {
+        console.log('WebSocket 连接关闭');
+        messageInput.disabled = true;
+        sendBtn.disabled = true;
+        
+         尝试重新连接（最多 3 次）
+        setTimeout(() = {
+          if (!ws) connectWebSocket();
+        }, 3000);
+      };
+
+      ws.onerror = (error) = {
+        console.error('WebSocket 错误', error);
+        addSystemMessage('⚠️ 连接出现问题，请稍候重试');
+      };
+    }
+
+    function addSystemMessage(text) {
+      const chatBox = document.getElementById('chatBox');
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'system';
+      msgDiv.textContent = text;
+      chatBox.appendChild(msgDiv);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function joinRoom() {
+      const pwd = document.getElementById('roomPassword').value.trim();
+      if (!pwd) return alert('请输入房间密码！');
+
+      ws.send(JSON.stringify({ type 'join', password pwd }));
+      document.getElementById('roomPassword').value = '';
+    }
+
+    function joinWsRoom(roomIdHash) {
+      ws.send(JSON.stringify({ 
+        type 'join-as-owner', 
+        roomIdHash roomIdHash 
+      }));
+    }
+
+    function sendMessage() {
+      const text = messageInput.value.trim();
+      if (!text  !ws) return;
+
+      ws.send(JSON.stringify({ type 'msg', text }));
+      messageInput.value = '';
+    }
+
+     ==================== 我的房间功能 ====================
+
+    function loadMyRooms() {
+      fetch('my-rooms', {
+        headers { 'Authorization' `Bearer ${token}` }
+      })
+      .then(r = r.json())
+      .then(rooms = {
+        const list = document.getElementById('myRoomsList');
+
+        if (rooms.length === 0) {
+          list.innerHTML = 'p你还没有创建任何房间 🎉p';
+          return;
+        }
+
+        let html = '';
+        rooms.forEach(room = {
+          html += `
+            div class=room-item
+              div class=room-id房间ID ${room.roomId}div
+              div class=room-meta
+                span创建时间 ${formatDateTime(room.createdAt)}span
+                span class=badge待审核 ${room.pendingCount}span
+              div
+              button class=btn-small onclick=enterMyRoom('${room.roomId}')👣 进入房间button
+            div
+          `;
+        });
+        list.innerHTML = html;
+      })
+      .catch(err = {
+        console.error('加载房间错误', err);
+        showError('加载房间失败');
+      });
+    }
+
+    function enterMyRoom(roomIdHash) {
+      ws.send(JSON.stringify({
+        type 'join-as-owner',
+        roomIdHash roomIdHash
+      }));
+      
+       切换到聊天标签页
+      switchTab('chat');
+    }
+
+     ==================== 审核中心功能 ====================
+
+    function loadApplications() {
+      fetch('my-applications', {
+        headers { 'Authorization' `Bearer ${token}` }
+      })
+      .then(r = r.json())
+      .then(apps = {
+        const list = document.getElementById('applicationsList');
+
+        if (apps.length === 0) {
+          list.innerHTML = 'p暂无待审核申请p';
+          return;
+        }
+
+        let html = '';
+        apps.forEach(app = {
+          html += `
+            div class=audit-item
+              divstrong${app.applicant_name}strong 申请加入房间div
+              div class=room-meta
+                span申请时间 ${formatDateTime(app.created_at)}span
+              div
+              div class=audit-actions
+                button class=btn-approve onclick=approve(${app.id})✅ 批准button
+                button class=btn-reject onclick=reject(${app.id})❌ 拒绝button
+              div
+            div
+          `;
+        });
+        list.innerHTML = html;
+      })
+      .catch(err = {
+        console.error('加载申请错误', err);
+      });
+    }
+
+    function approve(appId) {
+      fetch(`applications${appId}approve`, {
+        method 'POST',
+        headers { 
+          'Authorization' `Bearer ${token}`,
+          'Content-Type' 'applicationjson'
+        }
+      })
+      .then(() = loadApplications())
+      .catch(err = {
+        console.error('批准申请错误', err);
+        showError('批准失败');
+      });
+    }
+
+    function reject(appId) {
+      fetch(`applications${appId}reject`, {
+        method 'POST',
+        headers { 
+          'Authorization' `Bearer ${token}`,
+          'Content-Type' 'applicationjson'
+        }
+      })
+      .then(() = loadApplications())
+      .catch(err = {
+        console.error('拒绝申请错误', err);
+        showError('拒绝失败');
+      });
+    }
+
+     ==================== 标签页切换 ====================
+
+    function switchTab(tabName) {
+       更新标签样式
+      document.querySelectorAll('.nav-tab').forEach(tab = {
+        tab.classList.remove('active');
+      });
+      document.querySelector(`.nav-tab[data-tab=${tabName}]`).classList.add('active');
+
+       显示对应内容
+      document.querySelectorAll('.tab-content').forEach(content = {
+        content.classList.remove('active');
+      });
+      document.getElementById(`${tabName}Tab`).classList.add('active');
+
+       特殊处理
+      if (tabName === 'audit') {
+        loadApplications();
+      } else if (tabName === 'myRooms') {
+        loadMyRooms();
+      }
+    }
+
+     ==================== 键盘事件 ====================
+
+    document.getElementById('messageInput').addEventListener('keypress', e = {
+      if (e.key === 'Enter') sendMessage();
+    });
+
+    document.getElementById('roomPassword').addEventListener('keypress', e = {
+      if (e.key === 'Enter') joinRoom();
+    });
+
+    document.getElementById('password').addEventListener('keypress', e = {
+      if (e.key === 'Enter') login();
+    });
+
+    document.getElementById('inviteCode').addEventListener('keypress', e = {
+      if (e.key === 'Enter') register();
+    });
+  script
+body
+html
