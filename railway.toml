@@ -9,7 +9,9 @@
 
 [deploy]
   domain = "secure-chat"
-  [healthcheck]
+
+# ✅ 正确：healthcheck 作为顶级表（与 deploy 同级）
+[healthcheck]
   endpoint = "/health"
   interval = 15
   timeout = 3
@@ -17,5 +19,5 @@
   grace_period = 5
 
 [ports]
-  http = 8080  # 必须与你的监听端口匹配！
+  http = 8080
   expose = true
