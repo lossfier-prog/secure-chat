@@ -688,11 +688,8 @@ function notifyOwner(ownerId, roomDbId, applicantName) {
 const PORT = process.env.PORT || 3000;
 
 initDB().then(() => {
-  server.listen(PORT, () => {
-    console.log(`\n🚀 服务器已启动: http://localhost:${PORT}`);
-    console.log('💡 使用提示:');
-    console.log('   1. 用浏览器打开 http://localhost:3000');
-    console.log('   2. 使用管理员账户登录 (admin / SecureAdmin123!)');
-    console.log('   3. 在管理员面板生成邀请码');
-  });
+  server.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n🚀 服务器已启动: http://0.0.0.0:${PORT}`);
+  console.log(`🌐 可通过 ${process.env.RAILWAY_STATIC_URL || '外部URL'} 访问`);
+});
 });
