@@ -21,7 +21,6 @@
   "engines": {
     "node": "20.x"
   }
-  {
   "scripts": {
     "build": "npm run build-frontend && npm run build-backend",
     "build-frontend": "mkdir -p public && cp index.html public/",
@@ -29,4 +28,4 @@
     "start": "node server.js"
   }
 }
-}
+
