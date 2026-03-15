@@ -41,6 +41,9 @@ app.use((req, res, next) => {
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-123';
 const SALT_ROUNDS = 10;
+
+// 👇👇👇 新增这一行（非常重要！）👇👇👇
+const publicPath = path.join(__dirname, 'public');   // 全局路径
 /**
  * 生成唯一房间号 (8位字母+数字)
  */
@@ -279,7 +282,16 @@ app.post('/admin/generate-invite', authenticateToken, adminOnly, async (req, res
     res.status(500).json({ error: err.message });
   }
 });
+// ======== 8. 静态文件服务 ========
+console.log(`📁 静态文件路径: ${publicPath}`); // ✅ 此处已使用全局变量
 
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+  console.log('✅ 静态文件目录存在');
+} else {
+  console.warn('⚠️ 静态文件目录不存在，将自动创建');
+  fs.mkdirSync(publicPath, { recursive: true });
+}
 // ======== 9. SPA 回退路由（必须在最后！） ========
 app.get('*', (req, res) => {
   const indexPath = path.join(publicPath, 'index.html');
