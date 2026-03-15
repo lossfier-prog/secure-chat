@@ -1,3 +1,9 @@
+// ======== 1. 铁路日志系统（必须是第一行！） ========
+require('./logger');
+const logger = require('./logger');
+
+// ======== 2. 立即记录启动信息 ========
+logger.info('🚀 开始加载服务器 - 1/10');
 require('dotenv').config();
 const http = require('http');
 const express = require('express');
