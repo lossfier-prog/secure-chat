@@ -26,7 +26,22 @@ const wss = new WebSocket.Server({ server });
 const JWT_SECRET = process.env.JWT_SECRET || 'YOUR_SECURE_SECRET_KEY_123!';
 const SALT_ROUNDS = 10;
 const SALT = process.env.SALT || 'MySuperSecretSalt_9876';
-
+// ======== 日志验证端点（关键诊断工具） ========
+app.get('/log-test', (req, res) => {
+  logger.error(`❌ [${req.ip}] 触发错误日志测试`);
+  logger.warn(`⚠️ [${req.ip}] 触发警告日志测试`);
+  logger.info(`💡 [${req.ip}] 触发信息日志测试`);
+  logger.debug(`🔍 [${req.ip}] 触发调试日志测试`);
+  
+  res.json({
+    status: 'logs_sent',
+    message: '已发送测试日志到 stdout，请检查 Deploy Logs',
+    timestamp: new Date().toISOString()
+  });
+  
+  // 强制刷新日志
+  setTimeout(() => process.stdout.write(''), 50);
+});
 // ==================== 数据库连接 ====================
 let pool;
 
