@@ -316,6 +316,20 @@
         <div id="myRoomsList">
           <!-- 房间列表将自动加载 -->
         </div>
+        <div id="dashboard" style="display:none; margin:20px;">
+
+  <h2>欢迎，<span id="username"></span>！</h2>
+
+  <!-- 创建房间按钮 -->
+  <button id="createRoomBtn" style="padding:10px 20px; font-size:16px; margin-bottom:20px;">
+    📦 创建新房间
+  </button>
+
+  <!-- 房间列表 -->
+  <h3>我的房间</h3>
+  <ul id="roomList" style="list-style:none; padding:0;"></ul>
+
+</div>
       </div>
 
       <!-- 审核中心标签页 -->
@@ -843,6 +857,94 @@
     document.getElementById('inviteCode').addEventListener('keypress', e => {
       if (e.key === 'Enter') register();
     });
+    // ====================== 1. 检查登录状态 ======================
+function checkLogin() {
+  const token = localStorage.getItem('token');
+  if (!token) {
+    // 未登录 → 显示登录框
+    document.getElementById('loginSection').style.display = 'block';
+    document.getElementById('dashboard').style.display = 'none';
+  } else {
+    // 已登录 → 显示仪表盘
+    try {
+      // 解码 JWT 获取用户名
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      document.getElementById('username').textContent = payload.username;
+      document.getElementById('dashboard').style.display = 'block';
+      document.getElementById('loginSection').style.display = 'none';
+
+      // 加载房间列表
+      loadMyRooms();
+    } catch (e) {
+      console.error('无效令牌', e);
+      localStorage.removeItem('token');
+      checkLogin(); // 重新检查
+    }
+  }
+}
+
+// ====================== 2. 加载“我的房间”列表 ======================
+async function loadMyRooms() {
+  const token = localStorage.getItem('token');
+  const res = await fetch('/my-rooms', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+
+  const rooms = await res.json();
+  const list = document.getElementById('roomList');
+  list.innerHTML = '';
+
+  if (rooms.length === 0) {
+    list.innerHTML = '<li>暂无房间，点击上方按钮创建吧！</li>';
+    return;
+  }
+
+  rooms.forEach(room => {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      📌 房间ID: <code>${room.roomId}</code>  
+      创建时间: ${new Date(room.createdAt).toLocaleString()}
+      <button onclick="copyRoomId('${room.roomId}')" style="margin-left:10px;">复制房间号</button>
+    `;
+    list.appendChild(li);
+  });
+}
+
+// 复制房间号到剪贴板
+function copyRoomId(roomId) {
+  navigator.clipboard.writeText(roomId).then(() => {
+    alert(`房间号已复制：${roomId}\n请分享给其他用户，让他们用此号申请加入！`);
+  });
+}
+
+// ====================== 3. 创建房间按钮事件 ======================
+document.getElementById('createRoomBtn').addEventListener('click', async () => {
+  const token = localStorage.getItem('token');
+  if (!token) return alert('请先登录！');
+
+  try {
+    const res = await fetch('/rooms', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      alert(`✅ 房间创建成功！\n\n你的房间号是：${data.roomId}\n\n请保存好此房间号，其他用户需要此号才能申请加入。`);
+      loadMyRooms(); // 刷新房间列表
+    } else {
+      alert(`❌ 失败：${data.error}`);
+    }
+  } catch (err) {
+    console.error(err);
+    alert('网络错误，请重试');
+  }
+});
+
+// ====================== 4. 页面加载时检查登录状态 ======================
+window.addEventListener('DOMContentLoaded', checkLogin);
   </script>
 </body>
 </html>
