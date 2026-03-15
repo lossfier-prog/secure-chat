@@ -5,6 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "build": "npm run build-frontend && npm run build-backend",
+    "build-frontend": "mkdir -p public && cp index.html public/",
+    "build-backend": "echo 'Backend build completed'",
     "migrate": "node migrate.js"
   },
   "dependencies": {
@@ -20,12 +23,6 @@
   },
   "engines": {
     "node": "20.x"
-  }
-  "scripts": {
-    "build": "npm run build-frontend && npm run build-backend",
-    "build-frontend": "mkdir -p public && cp index.html public/",
-    "build-backend": "echo 'Backend build completed'",
-    "start": "node server.js"
   }
 }
 
