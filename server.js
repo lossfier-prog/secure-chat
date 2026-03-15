@@ -44,6 +44,13 @@ app.get('/ready', async (req, res) => {
     res.status(503).json({ status: 'unhealthy', error: err.message });
   }
 });
+const path = require('path');
+
+// 当用户访问根目录 / 时，返回 index.html
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 function createPool() {
   if (pool) return pool;
   
