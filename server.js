@@ -123,7 +123,58 @@ async function connectWithRetry(maxRetries = 5, delay = 3000) {
     }
   }
 }
+const sequelize = new Sequelize(process.env.DATABASE_URL, {
+  dialect: 'postgres',
+  logging: false,
+  ssl: {
+    require: true,
+    rejectUnauthorized: false
+  }
+});
 
+// ======== 添加模型定义 ========
+const User = sequelize.define('User', {
+  username: { type: DataTypes.STRING, unique: true, allowNull: false },
+  password: { type: DataTypes.STRING, allowNull: false },
+  salt: { type: DataTypes.STRING, allowNull: false },
+  isAdmin: { type: DataTypes.BOOLEAN, defaultValue: false }
+});
+
+const Room = sequelize.define('Room', {
+  roomId: { type: DataTypes.STRING, unique: true, allowNull: false },
+  password: { type: DataTypes.STRING, allowNull: false }
+});
+
+const InviteCode = sequelize.define('InviteCode', {
+  code: { type: DataTypes.STRING, unique: true, allowNull: false },
+  used: { type: DataTypes.BOOLEAN, defaultValue: false },
+  usedBy: { type: DataTypes.STRING }
+});
+
+const Application = sequelize.define('Application', {
+  applicantName: { type: DataTypes.STRING, allowNull: false },
+  status: { 
+    type: DataTypes.ENUM('pending', 'approved', 'rejected'), 
+    defaultValue: 'pending'
+  }
+});
+
+// ======== 关键！自动同步模型 ========
+sequelize.sync({ 
+  force: false, // ⚠️ 生产环境必须为 false！
+  alter: true   // 智能更新表结构（开发环境安全）
+})
+.then(() => {
+  console.log('✅ 数据库模型已同步');
+  console.log('   • Users 表:', User.tableName);
+  console.log('   • Rooms 表:', Room.tableName);
+  console.log('   • InviteCodes 表:', InviteCode.tableName);
+  console.log('   • Applications 表:', Application.tableName);
+})
+.catch(err => {
+  console.error('❌ 数据库同步失败:', err.message);
+  process.exit(1); // 重要：同步失败应退出
+});
 // ==================== 初始化数据库 ====================
 async function initDB() {
   try {
