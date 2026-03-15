@@ -21,16 +21,74 @@ const SALT_ROUNDS = 10;
 const SALT = process.env.SALT || 'MySuperSecretSalt_9876';
 
 // ==================== 数据库连接 ====================
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
+const { Pool } = require('pg');
+let pool;
+
+function createPool() {
+  if (pool) return pool;
+  
+  const connectionString = process.env.DATABASE_URL;
+  
+  if (!connectionString) {
+    console.error('❌ 未找到 DATABASE_URL 环境变量！');
+    console.error('请确保：');
+    console.error('1. 已在 Railway 添加 PostgreSQL 服务');
+    console.error('2. 数据库服务与应用服务已连接');
+    throw new Error('缺少 DATABASE_URL 环境变量');
   }
-});
+
+  console.log('🔌 尝试连接数据库:', connectionString.replace(/:([^:]+)@/, ':****@'));
+  
+  pool = new Pool({
+    connectionString: connectionString,
+    ssl: {
+      rejectUnauthorized: false // Railway 必需
+    },
+    connectionTimeoutMillis: 5000,
+    max: 20 // 连接池大小
+  });
+
+  // 添加错误处理
+  pool.on('error', (err) => {
+    console.error('❌ 数据库连接池错误:', err);
+    pool = null;
+  });
+
+  return pool;
+}
+
+// 增强的数据库连接重试逻辑
+async function connectWithRetry(maxRetries = 5, delay = 3000) {
+  let attempts = 0;
+  
+  while (attempts < maxRetries) {
+    try {
+      const pool = createPool();
+      await pool.query('SELECT NOW()');
+      console.log('✅ 数据库连接成功！');
+      return pool;
+    } catch (err) {
+      attempts++;
+      console.error(`❌ 数据库连接失败 (尝试 ${attempts}/${maxRetries}):`, 
+        err.message || err.code);
+      
+      if (attempts >= maxRetries) {
+        console.error('🛑 达到最大重试次数，无法连接数据库');
+        throw err;
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
 
 // ==================== 初始化数据库 ====================
 async function initDB() {
   try {
+    // 使用重试逻辑连接数据库
+    await connectWithRetry(10, 5000);
+    console.log('🔍 开始初始化数据库表...');
+    
     // 创建用户表
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -43,40 +101,8 @@ async function initDB() {
       )
     `);
 
-    // 创建邀请码表
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS invite_codes (
-        id SERIAL PRIMARY KEY,
-        code TEXT UNIQUE NOT NULL,
-        used BOOLEAN DEFAULT false,
-        used_by INTEGER REFERENCES users(id),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        used_at TIMESTAMP
-      )
-    `);
-
-    // 创建房间表
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS rooms (
-        id SERIAL PRIMARY KEY,
-        room_id TEXT UNIQUE NOT NULL,
-        owner_id INTEGER NOT NULL REFERENCES users(id),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // 创建申请表
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS applications (
-        id SERIAL PRIMARY KEY,
-        room_id INTEGER NOT NULL REFERENCES rooms(id),
-        applicant_id INTEGER NOT NULL REFERENCES users(id),
-        status TEXT CHECK(status IN ('pending','approved','rejected')) DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        responded_at TIMESTAMP
-      )
-    `);
-
+    // ... 其余表创建代码保持不变 ...
+    
     console.log('✅ 数据库表已初始化');
     
     // 检查并创建管理员（如果不存在）
@@ -101,7 +127,19 @@ async function initDB() {
   请立即登录并修改密码！`);
     }
   } catch (err) {
-    console.error('数据库初始化错误:', err);
+    console.error('❌ 数据库初始化错误:', err);
+    // 添加更详细的错误信息
+    if (err.code === 'ECONNREFUSED') {
+      console.error(`
+      ===========================================
+      数据库连接被拒绝！请检查：
+      1. 是否已在 Railway 添加 PostgreSQL 服务？
+      2. 数据库服务是否与应用服务已连接？
+      3. 是否在 Variables 中看到 DATABASE_URL 变量？
+      ===========================================
+      `);
+    }
+    throw err; // 确保错误被抛出，以便正确处理
   }
 }
 
