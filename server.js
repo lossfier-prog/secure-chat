@@ -36,14 +36,14 @@ function createPool() {
   const connectionString = process.env.DATABASE_URL;
   
   if (!connectionString) {
-    console.error('❌ 未找到 DATABASE_URL 环境变量！');
-    console.error('请确保：');
-    console.error('1. 已在 Railway 添加 PostgreSQL 服务');
-    console.error('2. 数据库服务与应用服务已连接');
+    logger.error('❌ 未找到 DATABASE_URL 环境变量！');
+    logger.error('请确保：');
+    logger.error('1. 已在 Railway 添加 PostgreSQL 服务');
+    logger.error('2. 数据库服务与应用服务已连接');
     throw new Error('缺少 DATABASE_URL 环境变量');
   }
 
-  console.log('🔌 正在初始化数据库连接池...');
+  logger.log('🔌 正在初始化数据库连接池...');
   pool = new Pool({
     connectionString: connectionString,
     ssl: {
@@ -54,7 +54,7 @@ function createPool() {
   });
 
   pool.on('error', (err) => {
-    console.error('❌ 数据库连接池意外错误:', err);
+    logger.error('❌ 数据库连接池意外错误:', err);
   });
 
   return pool;
@@ -68,18 +68,18 @@ async function connectWithRetry(maxRetries = 5, delay = 3000) {
     try {
       const p = createPool();
       await p.query('SELECT NOW()');
-      console.log('✅ 数据库连接成功！');
+      logger.log('✅ 数据库连接成功！');
       return p;
     } catch (err) {
       attempts++;
-      console.error(`❌ 数据库连接失败 (尝试 ${attempts}/${maxRetries}):`, err.message);
+      logger.error(`❌ 数据库连接失败 (尝试 ${attempts}/${maxRetries}):`, err.message);
       
       if (attempts >= maxRetries) {
-        console.error('🛑 达到最大重试次数，启动终止');
+        logger.error('🛑 达到最大重试次数，启动终止');
         throw err;
       }
       
-      console.log(`⏳ ${delay/1000}秒后重试...`);
+      logger.log(`⏳ ${delay/1000}秒后重试...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -91,7 +91,7 @@ async function initDB() {
     // 1. 等待连接
     await connectWithRetry(10, 5000);
     
-    console.log('🔍 开始检查并创建数据库表...');
+    logger.log('🔍 开始检查并创建数据库表...');
     
     // 创建用户表
     await pool.query(`
@@ -104,7 +104,7 @@ async function initDB() {
         last_login TIMESTAMP
       )
     `);
-    console.log('✅ Users 表就绪');
+    logger.log('✅ Users 表就绪');
 
     // 创建房间表
     await pool.query(`
@@ -115,7 +115,7 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    console.log('✅ Rooms 表就绪');
+    logger.log('✅ Rooms 表就绪');
 
     // 创建邀请码表
     await pool.query(`
@@ -128,7 +128,7 @@ async function initDB() {
         used_at TIMESTAMP
       )
     `);
-    console.log('✅ InviteCodes 表就绪');
+    logger.log('✅ InviteCodes 表就绪');
 
     // 创建申请表
     await pool.query(`
@@ -141,9 +141,9 @@ async function initDB() {
         responded_at TIMESTAMP
       )
     `);
-    console.log('✅ Applications 表就绪');
+    logger.log('✅ Applications 表就绪');
     
-    console.log('🎉 所有数据库表初始化完成');
+    logger.log('🎉 所有数据库表初始化完成');
     
     // 检查并创建管理员
     const adminCheck = await pool.query(
@@ -161,15 +161,15 @@ async function initDB() {
         ['admin', passwordHash]
       );
       
-      console.log(`🛡️ 管理员账户已创建！
+      logger.log(`🛡️ 管理员账户已创建！
   用户名: admin
   密码: ${adminPassword}
   请立即登录并修改密码！`);
     }
   } catch (err) {
-    console.error('❌ 数据库初始化严重错误:', err);
+    logger.error('❌ 数据库初始化严重错误:', err);
     if (err.code === 'ECONNREFUSED') {
-      console.error('提示: 检查 Railway 数据库是否已连接');
+      logger.error('提示: 检查 Railway 数据库是否已连接');
     }
     throw err;
   }
@@ -223,10 +223,10 @@ app.post('/admin/generate-invite', authenticateJWT, adminOnly, async (req, res) 
   try {
     const code = Math.random().toString(36).substring(2, 10).toUpperCase();
     await pool.query('INSERT INTO invite_codes (code) VALUES ($1)', [code]);
-    console.log(`🛡️ 管理员 ${req.user.username} 生成了邀请码: ${code}`);
+    logger.log(`🛡️ 管理员 ${req.user.username} 生成了邀请码: ${code}`);
     res.json({ inviteCode: code });
   } catch (err) {
-    console.error('生成邀请码错误:', err);
+    logger.error('生成邀请码错误:', err);
     res.status(500).json({ error: '生成失败' });
   }
 });
@@ -289,7 +289,7 @@ app.post('/register', async (req, res) => {
     const token = jwt.sign({ userId, username }, JWT_SECRET, { expiresIn: '24h' });
     res.json({ token });
   } catch (err) {
-    console.error('注册错误:', err);
+    logger.error('注册错误:', err);
     res.status(500).json({ error: '注册失败' });
   }
 });
@@ -323,7 +323,7 @@ app.post('/login', async (req, res) => {
     const token = jwt.sign({ userId: user.id, username }, JWT_SECRET, { expiresIn: '24h' });
     res.json({ token });
   } catch (err) {
-    console.error('登录错误:', err);
+    logger.error('登录错误:', err);
     res.status(500).json({ error: '登录失败' });
   }
 });
@@ -442,7 +442,7 @@ wss.on('connection', (socket, request) => {
     const userInfo = result.rows[0];
     socket.userId = userInfo.id;
     socket.username = userInfo.username;
-    console.log(`👤 ${userInfo.username} 连接成功`);
+    logger.log(`👤 ${userInfo.username} 连接成功`);
   });
 
   socket.on('message', async (rawMsg) => {
@@ -533,7 +533,7 @@ wss.on('connection', (socket, request) => {
         });
       }
     } catch (e) {
-      console.error('消息处理错误:', e);
+      logger.error('消息处理错误:', e);
     }
   });
 
@@ -545,7 +545,7 @@ wss.on('connection', (socket, request) => {
         if (room.size === 0) wsRooms.delete(socket.roomDbId);
       }
     }
-    console.log(`👋 ${socket.username} 断开连接`);
+    logger.log(`👋 ${socket.username} 断开连接`);
   });
 });
 
@@ -582,10 +582,10 @@ const PORT = process.env.PORT || 3000;
 // 先初始化数据库，再启动服务
 initDB().then(() => {
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n🚀 服务器已启动: http://0.0.0.0:${PORT}`);
-    console.log(`🌐 环境: ${process.env.NODE_ENV || 'development'}`);
+    logger.log(`\n🚀 服务器已启动: http://0.0.0.0:${PORT}`);
+    logger.log(`🌐 环境: ${process.env.NODE_ENV || 'development'}`);
   });
 }).catch(err => {
-  console.error('❌ 服务启动失败:', err);
+  logger.error('❌ 服务启动失败:', err);
   process.exit(1);
 });
