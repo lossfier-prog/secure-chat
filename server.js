@@ -22,7 +22,28 @@ const SALT = process.env.SALT || 'MySuperSecretSalt_9876';
 
 // ==================== 数据库连接 ====================
 let pool;
+// 健康检查端点 - 必须！
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    port: process.env.PORT || 8080
+  });
+  
+  // 添加日志便于诊断
+  console.log('🏥 健康检查请求 - 状态: 200');
+});
 
+// 可选：更严格的健康检查
+app.get('/ready', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.status(200).json({ status: 'ready', db: 'connected' });
+  } catch (err) {
+    console.error('❌ 健康检查失败:', err);
+    res.status(503).json({ status: 'unhealthy', error: err.message });
+  }
+});
 function createPool() {
   if (pool) return pool;
   
