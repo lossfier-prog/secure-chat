@@ -44,6 +44,39 @@ app.get('/ready', async (req, res) => {
     res.status(503).json({ status: 'unhealthy', error: err.message });
   }
 });
+// 数据库健康检查
+app.get('/db-health', async (req, res) => {
+  try {
+    await sequelize.authenticate();
+    
+    // 检查关键表
+    const tables = await sequelize.getQueryInterface().showAllTables();
+    const requiredTables = ['Users', 'Rooms', 'InviteCodes', 'Applications'];
+    const missingTables = requiredTables.filter(t => !tables.includes(t));
+    
+    if (missingTables.length > 0) {
+      return res.status(500).json({
+        status: 'error',
+        message: `缺少必要表: ${missingTables.join(', ')}`
+      });
+    }
+    
+    res.status(200).json({
+      status: 'ok',
+      tables: tables.length,
+      environment: process.env.NODE_ENV
+    });
+  } catch (err) {
+    console.error('数据库健康检查失败:', err);
+    res.status(500).json({
+      status: 'error',
+      message: '数据库连接失败',
+      error: err.message
+    });
+  }
+});
+
+console.log('🏥 已添加数据库健康检查: /db-health');
 // ======== 在其他路由之前添加 ========
 const path = require('path');
 
