@@ -44,11 +44,26 @@ app.get('/ready', async (req, res) => {
     res.status(503).json({ status: 'unhealthy', error: err.message });
   }
 });
+// ======== 在其他路由之前添加 ========
 const path = require('path');
 
-// 当用户访问根目录 / 时，返回 index.html
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+// 1. 提供静态文件（关键！）
+app.use(express.static(path.join(__dirname, 'public')));
+console.log(`📁 服务静态文件: ${path.join(__dirname, 'public')}`);
+
+// 2. SPA 回退路由（解决刷新404问题）
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  console.log(`🏠 服务 SPA: ${req.path}`);
+});
+
+// ======== 保持你的 API 路由 ========
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    port: process.env.PORT || 8080
+  });
 });
 
 function createPool() {
