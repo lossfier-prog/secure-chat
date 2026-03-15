@@ -1,0 +1,15 @@
+# Railway 配置文件
+[build]
+  dockerfile = false
+
+[env]
+  JWT_SECRET = { generated = true, from = "secret" }
+  SALT = { generated = true, length = 32 }
+  ADMIN_PASSWORD = { generated = true, length = 16, charset = "alphanumeric" }
+
+[ports]
+  http = 3000
+  expose = true
+
+[deploy]
+  domain = "secure-chat"
