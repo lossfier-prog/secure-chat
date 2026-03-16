@@ -505,7 +505,8 @@ app.get('/rooms/:roomId/applications',
         a.id, 
         a.status,
         u.id AS user_id,
-        u.username
+        u.username,
+        a.created_at
       FROM applications a
       JOIN users u ON a.applicant_id = u.id
       WHERE a.room_id = $1 AND a.status = 'pending'
