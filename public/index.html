@@ -299,10 +299,11 @@
       <div id="chatTab" class="tab-content active">
         <div id="chatBox"></div>
         
-        <div>
-          <input type="text" id="roomPassword" placeholder="输入房间密码">
-          <button onclick="joinRoom()">加入房间</button>
-        </div>
+        <div style="margin-top: 15px;">
+  <input type="text" id="roomIdInput" placeholder="输入房间号（例如ABC12345）">
+  <button onclick="applyToJoinRoom()">申请加入房间</button>
+  <div class="error" id="joinError" style="margin-top: 5px;"></div>
+</div>
 
         <div style="margin-top: 15px;">
           <input type="text" id="messageInput" placeholder="输入消息..." disabled>
@@ -971,6 +972,51 @@ async function createRoom() {
   } catch (error) {
     console.error('创建房间错误:', error);
     alert('创建房间时发生错误，请重试。');
+  }
+}
+    async function applyToJoinRoom() {
+  const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
+  const joinError = document.getElementById('joinError');
+
+  if (!roomId) {
+    joinError.textContent = '请输入房间号';
+    return;
+  }
+
+  if (roomId.length < 6) {
+    joinError.textContent = '房间号格式不正确';
+    return;
+  }
+
+  try {
+    const response = await fetch(`/rooms/${roomId}/applications`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      joinError.textContent = '';
+      document.getElementById('roomIdInput').value = '';
+      addSystemMessage(`✅ 申请提交成功！等待房主审核... (房间号: ${roomId})`);
+
+      // 如果WebSocket连接正常，还可以发送通知
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'application_submitted',
+          roomId: roomId
+        }));
+      }
+    } else {
+      joinError.textContent = data.error || '申请失败';
+    }
+  } catch (error) {
+    console.error('申请加入房间错误:', error);
+    joinError.textContent = '网络错误，请重试';
   }
 }
 // ====================== 4. 页面加载时检查登录状态 ======================
