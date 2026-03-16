@@ -132,7 +132,8 @@ const roomOwnerOnly = async (req, res, next) => {
   if (!roomId) return res.status(400).json({ error: '缺少房间ID' });
 
   const db = getPool();
-  const room = await db.query('SELECT owner_id FROM rooms WHERE id = $1', [roomId]);
+  // 先查找房间的数据库ID
+  const room = await db.query('SELECT owner_id FROM rooms WHERE room_id = $1', [roomId]);
   
   if (room.rows.length === 0) {
     return res.status(404).json({ error: '房间不存在' });
@@ -425,6 +426,15 @@ app.get('/rooms/:roomId/applications',
   console.log(`📋 房间 ${req.params.roomId} 申请列表`);
   try {
     const db = getPool();
+    const { roomId } = req.params;
+
+    // 先查找房间的数据库ID
+    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在' });
+    }
+    const roomDbId = roomResult.rows[0].id;
+
     const applications = await db.query(`
       SELECT 
         a.id, 
@@ -435,7 +445,7 @@ app.get('/rooms/:roomId/applications',
       JOIN users u ON a.applicant_id = u.id
       WHERE a.room_id = $1 AND a.status = 'pending'
       ORDER BY a.created_at DESC
-    `, [req.params.roomId]);
+    `, [roomDbId]);
 
     res.json(applications.rows);
   } catch (err) {
