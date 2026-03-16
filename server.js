@@ -210,31 +210,35 @@ app.post('/login', async (req, res) => {
     res.status(500).json({ error: '登录失败: ' + err.message });
   }
 });
-
-// 获取我的房间
-app.get('/my-rooms', async (req, res) => {
+//获取房间列表
+app.get('/my-rooms', authenticateToken, async (req, res) => {
   console.log('🏠 获取房间列表');
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      return res.status(401).json({ error: '未授权' });
-    }
-    
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
     const db = getPool();
+    // 按创建时间倒序，最新创建的房间排在最前面
     const result = await db.query(
-      'SELECT id, room_id, created_at FROM rooms WHERE owner_id = $1',
-      [decoded.userId]
+      `SELECT id, room_id, created_at FROM rooms 
+       WHERE owner_id = $1 
+       ORDER BY created_at DESC`,
+      [req.user.userId]
     );
-    
-    res.json(result.rows.map(r => ({
-      id: r.id,
-      roomId: r.room_id.substring(0, 8) + '...',
-      createdAt: r.created_at,
-      pendingCount: 0
-    })));
+
+    // 同时查询每个房间的待审核申请数量
+    const roomsWithPending = await Promise.all(result.rows.map(async room => {
+      const pendingRes = await db.query(
+        `SELECT COUNT(*) FROM applications 
+         WHERE room_id = $1 AND status = 'pending'`,
+        [room.id]
+      );
+      return {
+        id: room.id,
+        roomId: room.room_id,
+        createdAt: room.created_at,
+        pendingCount: parseInt(pendingRes.rows[0].count)
+      };
+    }));
+
+    res.json(roomsWithPending);
   } catch (err) {
     console.error('❌ 获取房间错误:', err.message);
     res.status(500).json({ error: err.message });
