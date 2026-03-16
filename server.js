@@ -534,6 +534,53 @@ app.post('/applications/:appId/reject',
     res.status(500).json({ error: err.message });
   }
 });
+
+// 获取房间历史消息
+app.get('/rooms/:roomId/messages', authenticateToken, async (req, res) => {
+  console.log(`📜 获取房间 ${req.params.roomId} 历史消息`);
+  try {
+    const db = getPool();
+    const { roomId } = req.params;
+    const { limit = 50, offset = 0 } = req.query;
+
+    // 查找房间ID
+    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在' });
+    }
+
+    const roomDbId = roomResult.rows[0].id;
+
+    // 验证用户是否是房间成员
+    const memberResult = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomDbId, req.user.userId]);
+    if (memberResult.rows.length === 0) {
+      return res.status(403).json({ error: '您不是该房间的成员' });
+    }
+
+    // 获取消息，按时间倒序，最新的消息在前面
+    const messages = await db.query(`
+      SELECT 
+        m.id, 
+        m.content, 
+        m.created_at, 
+        u.username
+      FROM messages m
+      JOIN users u ON m.user_id = u.id
+      WHERE m.room_id = $1
+      ORDER BY m.created_at DESC
+      LIMIT $2 OFFSET $3
+    `, [roomDbId, parseInt(limit), parseInt(offset)]);
+
+    // 反转消息顺序，使最早的消息在前面
+    const reversedMessages = messages.rows.reverse();
+
+    res.json(reversedMessages);
+
+  } catch (err) {
+    console.error('❌ 获取消息错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 // ======== 11. 创建 HTTP 服务器 ========
 const server = http.createServer(app);
 
@@ -612,13 +659,47 @@ wss.on('connection', (socket, req) => {
       }
       // 处理其他消息类型...
       else if (data.type === 'chatMessage') {
-        // 转发聊天消息
-        broadcastToRoom(data.roomId, {
-          type: 'chatMessage',
-          from: username,
-          message: data.message,
-          timestamp: new Date().toISOString()
-        });
+        // 存储消息到数据库
+        const db = getPool();
+        if (db) {
+          // 查找房间ID
+          db.query('SELECT id FROM rooms WHERE room_id = $1', [data.roomId])
+            .then(roomResult => {
+              if (roomResult.rows.length > 0) {
+                const roomDbId = roomResult.rows[0].id;
+                // 验证用户是否是房间成员
+                return db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomDbId, userId]);
+              }
+              throw new Error('房间不存在');
+            })
+            .then(memberResult => {
+              if (memberResult.rows.length > 0) {
+                const roomDbId = memberResult.rows[0].room_id;
+                // 存储消息
+                return db.query(
+                  'INSERT INTO messages (room_id, user_id, content) VALUES ($1, $2, $3) RETURNING id, created_at',
+                  [roomDbId, userId, data.message]
+                );
+              }
+              throw new Error('您不是该房间的成员');
+            })
+            .then(async () => {
+              // 转发聊天消息
+              await broadcastToRoom(data.roomId, {
+                type: 'chatMessage',
+                from: username,
+                message: data.message,
+                timestamp: new Date().toISOString()
+              });
+            })
+            .catch(err => {
+              console.error('存储消息错误:', err.message);
+              socket.send(JSON.stringify({
+                type: 'error',
+                message: err.message
+              }));
+            });
+        }
       }
       // 其他消息类型处理...
     } catch (err) {
@@ -664,15 +745,32 @@ wss.onmessage = (event) => {
   }
 };
 // 广播消息到房间
-function broadcastToRoom(roomId, message) {
+async function broadcastToRoom(roomId, message) {
   if (!roomId) return;
 
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      // 这里可以添加房间成员验证逻辑
-      client.send(JSON.stringify(message));
-    }
-  });
+  try {
+    const db = getPool();
+    if (!db) return;
+
+    // 查找房间ID
+    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (roomResult.rows.length === 0) return;
+
+    const roomDbId = roomResult.rows[0].id;
+
+    // 获取房间所有成员
+    const membersResult = await db.query('SELECT user_id FROM room_members WHERE room_id = $1', [roomDbId]);
+    const memberIds = membersResult.rows.map(row => row.user_id);
+
+    // 只向房间成员发送消息
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN && client.userId && memberIds.includes(client.userId)) {
+        client.send(JSON.stringify(message));
+      }
+    });
+  } catch (err) {
+    console.error('广播消息错误:', err.message);
+  }
 }
 
 // ======== 13. 数据库初始化 ========
@@ -746,6 +844,18 @@ async function initDatabase() {
 `);
 console.log('   • room_members 表就绪');
 
+// 聊天消息表
+await db.query(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+console.log('   • messages 表就绪');
+
 // 申请表 —— 已存在，但确保有 status 字段
 await db.query(`
   ALTER TABLE applications 
@@ -759,6 +869,23 @@ await db.query(`
   }
 }
 
+// 定期清理3天前的消息
+async function cleanOldMessages() {
+  try {
+    const db = getPool();
+    if (!db) return;
+
+    // 删除3天前的消息
+    const result = await db.query(
+      'DELETE FROM messages WHERE created_at < NOW() - INTERVAL \'3 days\''
+    );
+
+    console.log(`🧹 清理了 ${result.rowCount} 条3天前的消息`);
+  } catch (err) {
+    console.error('清理旧消息错误:', err.message);
+  }
+}
+
 // ======== 14. 启动服务器（关键！） ========
 async function startServer() {
   console.log('\n🚀 正在启动服务器...');
@@ -767,6 +894,11 @@ async function startServer() {
   await initDatabase().catch(err => {
     console.warn('⚠️ 数据库初始化警告:', err.message);
   });
+  
+  // 启动定期清理任务（每24小时执行一次）
+  setInterval(cleanOldMessages, 24 * 60 * 60 * 1000);
+  // 启动时执行一次清理
+  cleanOldMessages();
   
   // 关键！监听所有接口
   server.listen(PORT, '0.0.0.0', () => {
