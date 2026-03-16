@@ -1045,39 +1045,97 @@ async function loadMyRooms() {
 
     /* ==================== 审核中心功能 ==================== */
 
-    function loadApplications() {
-      fetch('my-applications', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      .then(r => r.json())
-      .then(apps => {
-        const list = document.getElementById('applicationsList');
+    async function loadApplications() {
+      const list = document.getElementById('applicationsList');
+      list.innerHTML = '<p>加载中...</p>';
 
-        if (apps.length === 0) {
-          list.innerHTML = '<p>暂无待审核申请</p>';
+      try {
+        let allApplications = [];
+
+        // 1. 获取用户作为房主需要审核的申请
+        const roomsResponse = await fetch('/my-rooms', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (roomsResponse.ok) {
+          const rooms = await roomsResponse.json();
+          
+          // 为每个房间获取待审核的申请
+          for (const room of rooms) {
+            const appsResponse = await fetch(`/rooms/${room.roomId}/applications`, {
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (appsResponse.ok) {
+              const apps = await appsResponse.json();
+              // 为每个申请添加房间信息
+              apps.forEach(app => {
+                app.roomId = room.roomId;
+                app.type = 'toReview'; // 标记为需要审核的申请
+              });
+              allApplications = [...allApplications, ...apps];
+            }
+          }
+        }
+
+        // 2. 获取用户自己提交的申请
+        const myAppsResponse = await fetch('/my-applications', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (myAppsResponse.ok) {
+          const myApps = await myAppsResponse.json();
+          // 为每个申请添加类型标记
+          myApps.forEach(app => {
+            app.type = 'myApplication'; // 标记为自己的申请
+          });
+          allApplications = [...allApplications, ...myApps];
+        }
+
+        if (allApplications.length === 0) {
+          list.innerHTML = '<p>暂无申请</p>';
           return;
         }
 
+        // 按时间倒序排序，最新的申请在前面
+        allApplications.sort((a, b) => {
+          return new Date(b.created_at || b.createdAt) - new Date(a.created_at || a.createdAt);
+        });
+
         let html = '';
-        apps.forEach(app => {
-          html += `
-            <div class="audit-item">
-              <div><strong>${app.applicant_name}</strong> 申请加入房间</div>
-              <div class="room-meta">
-                <span>申请时间 ${formatDateTime(app.created_at)}</span>
+        allApplications.forEach(app => {
+          if (app.type === 'toReview') {
+            // 需要审核的申请
+            html += `
+              <div class="audit-item">
+                <div><strong>${app.username}</strong> 申请加入房间 ${app.roomId}</div>
+                <div class="room-meta">
+                  <span>申请时间 ${formatDateTime(app.created_at)}</span>
+                </div>
+                <div class="audit-actions">
+                  <button class="btn-approve" onclick="approve(${app.id})">✅ 批准</button>
+                  <button class="btn-reject" onclick="reject(${app.id})">❌ 拒绝</button>
+                </div>
               </div>
-              <div class="audit-actions">
-                <button class="btn-approve" onclick="approve(${app.id})">✅ 批准</button>
-                <button class="btn-reject" onclick="reject(${app.id})">❌ 拒绝</button>
+            `;
+          } else {
+            // 自己的申请
+            html += `
+              <div class="audit-item">
+                <div>你申请加入房间 ${app.room_id}</div>
+                <div class="room-meta">
+                  <span>申请时间 ${formatDateTime(app.created_at)}</span>
+                  <span>状态: ${app.status === 'pending' ? '待审核' : app.status === 'approved' ? '已批准' : '已拒绝'}</span>
+                </div>
               </div>
-            </div>
-          `;
+            `;
+          }
         });
         list.innerHTML = html;
-      })
-      .catch(err => {
+      } catch (err) {
         console.error('加载申请错误', err);
-      });
+        list.innerHTML = '<p>加载申请失败，请刷新页面</p>';
+      }
     }
 
     function approve(appId) {
