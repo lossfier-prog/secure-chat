@@ -1052,78 +1052,29 @@ async function loadMyRooms() {
       try {
         let allApplications = [];
         let errors = [];
+        let serverAvailable = true;
 
-        // 1. 获取用户作为房主需要审核的申请
-        try {
-          const roomsResponse = await fetch('/my-rooms', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          
-          if (roomsResponse.ok) {
-            const rooms = await roomsResponse.json();
-            
-            // 为每个房间获取待审核的申请
-            for (const room of rooms) {
-              try {
-                const appsResponse = await fetch(`/rooms/${room.roomId}/applications`, {
-                  headers: { 
-                    'Authorization': `Bearer ${token}`,
-                    'Accept': 'application/json'
-                  }
-                });
-
-                if (appsResponse.ok) {
-                  try {
-                    const apps = await appsResponse.json();
-                    // 为每个申请添加房间信息
-                    apps.forEach(app => {
-                      app.roomId = room.roomId;
-                      app.type = 'toReview'; // 标记为需要审核的申请
-                    });
-                    allApplications = [...allApplications, ...apps];
-                  } catch (jsonErr) {
-                    console.error(`解析房间 ${room.roomId} 申请数据失败:`, jsonErr);
-                    errors.push(`房间 ${room.roomId} 申请数据解析失败`);
-                  }
-                } else {
-                  // 处理API返回的错误状态码
-                  try {
-                    const errorData = await appsResponse.json();
-                    console.error(`获取房间 ${room.roomId} 申请失败: ${errorData.error || `状态码 ${appsResponse.status}`}`);
-                    errors.push(`房间 ${room.roomId} 申请获取失败: ${errorData.error || `状态码 ${appsResponse.status}`}`);
-                  } catch (jsonErr) {
-                    // 如果返回的是HTML而不是JSON
-                    console.error(`获取房间 ${room.roomId} 申请失败: 服务器返回非JSON响应`);
-                    errors.push(`房间 ${room.roomId} 申请获取失败: 服务器返回非JSON响应`);
-                  }
-                }
-              } catch (roomErr) {
-                console.error(`获取房间 ${room.roomId} 申请失败`, roomErr);
-                errors.push(`房间 ${room.roomId} 申请获取失败: ${roomErr.message}`);
-              }
-            }
-          } else {
-            console.error('获取房间列表失败', roomsResponse.status);
-            errors.push('房间列表获取失败');
-          }
-        } catch (err) {
-          console.error('获取房间列表错误', err);
-          errors.push('房间列表获取失败');
-        }
-
-        // 2. 获取用户自己提交的申请
+        // 1. 获取用户自己提交的申请（优先加载，因为这个功能正常）
         try {
           const myAppsResponse = await fetch('/my-applications', {
-            headers: { 'Authorization': `Bearer ${token}` }
+            headers: { 
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/json'
+            }
           });
           
           if (myAppsResponse.ok) {
-            const myApps = await myAppsResponse.json();
-            // 为每个申请添加类型标记
-            myApps.forEach(app => {
-              app.type = 'myApplication'; // 标记为自己的申请
-            });
-            allApplications = [...allApplications, ...myApps];
+            try {
+              const myApps = await myAppsResponse.json();
+              // 为每个申请添加类型标记
+              myApps.forEach(app => {
+                app.type = 'myApplication'; // 标记为自己的申请
+              });
+              allApplications = [...allApplications, ...myApps];
+            } catch (jsonErr) {
+              console.error('解析个人申请数据失败:', jsonErr);
+              errors.push('个人申请数据解析失败');
+            }
           } else {
             console.error('获取自己的申请失败', myAppsResponse.status);
             errors.push('个人申请获取失败');
@@ -1131,11 +1082,73 @@ async function loadMyRooms() {
         } catch (err) {
           console.error('获取自己的申请错误', err);
           errors.push('个人申请获取失败');
+          serverAvailable = false;
+        }
+
+        // 2. 获取用户作为房主需要审核的申请
+        if (serverAvailable) {
+          try {
+            const roomsResponse = await fetch('/my-rooms', {
+              headers: { 
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/json'
+              }
+            });
+            
+            if (roomsResponse.ok) {
+              try {
+                const rooms = await roomsResponse.json();
+                
+                // 为每个房间获取待审核的申请
+                for (const room of rooms) {
+                  try {
+                    const appsResponse = await fetch(`/rooms/${room.roomId}/applications`, {
+                      headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Accept': 'application/json'
+                      }
+                    });
+
+                    if (appsResponse.ok) {
+                      try {
+                        const apps = await appsResponse.json();
+                        // 为每个申请添加房间信息
+                        apps.forEach(app => {
+                          app.roomId = room.roomId;
+                          app.type = 'toReview'; // 标记为需要审核的申请
+                        });
+                        allApplications = [...allApplications, ...apps];
+                      } catch (jsonErr) {
+                        console.error(`解析房间 ${room.roomId} 申请数据失败:`, jsonErr);
+                        // 继续处理其他房间，不因为一个房间的错误而停止
+                      }
+                    }
+                  } catch (roomErr) {
+                    console.error(`获取房间 ${room.roomId} 申请失败`, roomErr);
+                    // 继续处理其他房间，不因为一个房间的错误而停止
+                  }
+                }
+              } catch (jsonErr) {
+                console.error('解析房间列表数据失败:', jsonErr);
+                errors.push('房间列表数据解析失败');
+              }
+            } else {
+              console.error('获取房间列表失败', roomsResponse.status);
+              errors.push('房间列表获取失败');
+            }
+          } catch (err) {
+            console.error('获取房间列表错误', err);
+            errors.push('房间列表获取失败');
+          }
         }
 
         if (allApplications.length === 0) {
           if (errors.length > 0) {
-            list.innerHTML = `<p>加载申请时遇到错误：${errors.join('、')}</p><p>部分申请可能未显示</p>`;
+            if (!serverAvailable) {
+              list.innerHTML = '<p>服务器暂时不可用，请稍后再试</p>';
+            } else {
+              list.innerHTML = '<p>暂无申请</p>';
+            }
           } else {
             list.innerHTML = '<p>暂无申请</p>';
           }
@@ -1196,14 +1209,10 @@ async function loadMyRooms() {
           }
         });
         
-        if (errors.length > 0) {
-          html = `<div style="color: #ff6b6b; margin-bottom: 10px;">加载时遇到错误：${errors.join('、')}</div>` + html;
-        }
-        
         list.innerHTML = html;
       } catch (err) {
         console.error('加载申请错误', err);
-        list.innerHTML = `<p>加载申请失败：${err.message}</p><p>请刷新页面重试</p>`;
+        list.innerHTML = '<p>加载申请失败，请稍后再试</p>';
       }
     }
 
