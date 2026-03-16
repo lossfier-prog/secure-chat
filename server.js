@@ -7,7 +7,27 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+// 👉 必须放在所有路由之前！
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secure-jwt-secret-key-here'; // 与你生成token时用的密钥一致
 
+// 定义JWT验证中间件
+const authenticateJWT = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: '未提供授权令牌' });
+
+    const token = authHeader.split(' ')[1];
+    if (!token) return res.status(401).json({ error: '无效的令牌格式' });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded; // 将用户信息附加到req对象
+    next(); // 继续执行后续路由
+  } catch (err) {
+    console.error('JWT验证失败:', err.message);
+    res.status(401).json({ error: '无效或过期的令牌' });
+  }
+};
 // ======== 2. 立即输出日志（验证应用启动） ========
 console.log('\n');
 console.log('========================================');
