@@ -58,7 +58,6 @@ app.use((req, res, next) => {
 
 // ======== 4. 配置常量 ========
 const PORT = process.env.PORT || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-123';
 const SALT_ROUNDS = 10;
 
 // 👇👇👇 新增这一行（非常重要！）👇👇👇
