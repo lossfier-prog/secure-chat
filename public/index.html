@@ -936,7 +936,43 @@ document.getElementById('createRoomBtn').addEventListener('click', async () => {
     alert('网络错误，请重试');
   }
 });
+/* 创建房间功能 */
+async function createRoom() {
+  const token = localStorage.getItem('token');
+  if (!token) {
+    alert('请先登录!');
+    return;
+  }
 
+  try {
+    // 弹出输入框让用户输入房间名（可选）
+    const roomName = prompt('请输入房间名称（可选，默认随机命名）:', '');
+    if (roomName === null) return; // 用户取消
+
+    const response = await fetch('/rooms', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        roomName: roomName || '我的聊天室' // 如果用户没输入，使用默认名
+      })
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      alert(`🎉 房间创建成功!\n房间ID: ${data.roomId}\n请保存好这个ID，其他用户需要它才能申请加入。`);
+      loadMyRooms(); // 刷新房间列表
+    } else {
+      alert(`❌ 创建失败: ${data.error || '未知错误'}`);
+    }
+  } catch (error) {
+    console.error('创建房间错误:', error);
+    alert('创建房间时发生错误，请重试。');
+  }
+}
 // ====================== 4. 页面加载时检查登录状态 ======================
 window.addEventListener('DOMContentLoaded', checkLogin);
   </script>
