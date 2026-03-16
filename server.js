@@ -4,7 +4,6 @@ const express = require('express');
 const WebSocket = require('ws');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
 // 👉 必须放在所有路由之前！
