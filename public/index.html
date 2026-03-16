@@ -310,27 +310,21 @@
         </div>
       </div>
 
-      <!-- 我的房间标签页 -->
-      <div id="myRoomsTab" class="tab-content">
-        <h3>🏠 我创建的房间</h3>
-        <div id="myRoomsList">
-          <!-- 房间列表将自动加载 -->
-        </div>
-        <div id="dashboard" style="display:none; margin:20px;">
+     <!-- 我的房间标签页 -->
+<div id="myRoomsTab" class="tab-content">
+  <h3>🏠 我的房间</h3>
 
-  <h2>欢迎，<span id="username"></span>！</h2>
+  <!-- 添加创建房间按钮 -->
+  <div style="margin-bottom: 20px;">
+    <button onclick="createRoom()" style="padding: 10px 20px; width: 100%; background: #4CAF50;">
+      📦 创建新房间
+    </button>
+  </div>
 
-  <!-- 创建房间按钮 -->
-  <button id="createRoomBtn" style="padding:10px 20px; font-size:16px; margin-bottom:20px;">
-    📦 创建新房间
-  </button>
-
-  <!-- 房间列表 -->
-  <h3>我的房间</h3>
-  <ul id="roomList" style="list-style:none; padding:0;"></ul>
-
+  <div id="myRoomsList">
+    <!-- 房间列表将自动加载 -->
+  </div>
 </div>
-      </div>
 
       <!-- 审核中心标签页 -->
       <div id="auditTab" class="tab-content">
