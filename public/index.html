@@ -1077,10 +1077,15 @@ async function loadMyRooms() {
                     app.type = 'toReview'; // 标记为需要审核的申请
                   });
                   allApplications = [...allApplications, ...apps];
+                } else {
+                  // 处理API返回的错误状态码
+                  const errorData = await appsResponse.json().catch(() => ({}));
+                  console.error(`获取房间 ${room.roomId} 申请失败: ${errorData.error || `状态码 ${appsResponse.status}`}`);
+                  errors.push(`房间 ${room.roomId} 申请获取失败: ${errorData.error || `状态码 ${appsResponse.status}`}`);
                 }
               } catch (roomErr) {
                 console.error(`获取房间 ${room.roomId} 申请失败`, roomErr);
-                errors.push(`房间 ${room.roomId} 申请获取失败`);
+                errors.push(`房间 ${room.roomId} 申请获取失败: ${roomErr.message}`);
               }
             }
           } else {
