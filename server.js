@@ -622,7 +622,7 @@ wss.on('connection', (socket, req) => {
     }
   });
 });
-ws.onmessage = (event) => {
+wss.onmessage = (event) => {
   try {
     const data = JSON.parse(event.data);
     const chatBox = document.getElementById('chatBox');
