@@ -1066,22 +1066,36 @@ async function loadMyRooms() {
             for (const room of rooms) {
               try {
                 const appsResponse = await fetch(`/rooms/${room.roomId}/applications`, {
-                  headers: { 'Authorization': `Bearer ${token}` }
+                  headers: { 
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'application/json'
+                  }
                 });
 
                 if (appsResponse.ok) {
-                  const apps = await appsResponse.json();
-                  // 为每个申请添加房间信息
-                  apps.forEach(app => {
-                    app.roomId = room.roomId;
-                    app.type = 'toReview'; // 标记为需要审核的申请
-                  });
-                  allApplications = [...allApplications, ...apps];
+                  try {
+                    const apps = await appsResponse.json();
+                    // 为每个申请添加房间信息
+                    apps.forEach(app => {
+                      app.roomId = room.roomId;
+                      app.type = 'toReview'; // 标记为需要审核的申请
+                    });
+                    allApplications = [...allApplications, ...apps];
+                  } catch (jsonErr) {
+                    console.error(`解析房间 ${room.roomId} 申请数据失败:`, jsonErr);
+                    errors.push(`房间 ${room.roomId} 申请数据解析失败`);
+                  }
                 } else {
                   // 处理API返回的错误状态码
-                  const errorData = await appsResponse.json().catch(() => ({}));
-                  console.error(`获取房间 ${room.roomId} 申请失败: ${errorData.error || `状态码 ${appsResponse.status}`}`);
-                  errors.push(`房间 ${room.roomId} 申请获取失败: ${errorData.error || `状态码 ${appsResponse.status}`}`);
+                  try {
+                    const errorData = await appsResponse.json();
+                    console.error(`获取房间 ${room.roomId} 申请失败: ${errorData.error || `状态码 ${appsResponse.status}`}`);
+                    errors.push(`房间 ${room.roomId} 申请获取失败: ${errorData.error || `状态码 ${appsResponse.status}`}`);
+                  } catch (jsonErr) {
+                    // 如果返回的是HTML而不是JSON
+                    console.error(`获取房间 ${room.roomId} 申请失败: 服务器返回非JSON响应`);
+                    errors.push(`房间 ${room.roomId} 申请获取失败: 服务器返回非JSON响应`);
+                  }
                 }
               } catch (roomErr) {
                 console.error(`获取房间 ${room.roomId} 申请失败`, roomErr);
