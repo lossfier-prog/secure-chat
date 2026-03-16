@@ -265,9 +265,28 @@ app.get('/my-rooms', authenticateToken, async (req, res) => {
 });
 
 // 获取申请列表
-app.get('/my-applications', async (req, res) => {
+app.get('/my-applications', authenticateToken, async (req, res) => {
   console.log('📋 获取申请列表');
-  res.json([]);
+  try {
+    const db = getPool();
+    const applications = await db.query(`
+      SELECT 
+        a.id, 
+        a.status,
+        r.room_id,
+        u.username AS room_owner
+      FROM applications a
+      JOIN rooms r ON a.room_id = r.id
+      JOIN users u ON r.owner_id = u.id
+      WHERE a.applicant_id = $1
+      ORDER BY a.created_at DESC
+    `, [req.user.userId]);
+
+    res.json(applications.rows);
+  } catch (err) {
+    console.error('❌ 获取申请列表错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ======================================================
@@ -370,6 +389,52 @@ app.post('/rooms', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('❌ 创建房间错误:', err.message);
     res.status(500).json({ error: '创建房间失败: ' + err.message });
+  }
+});
+
+// 删除房间
+app.delete('/rooms/:roomId', authenticateToken, roomOwnerOnly, async (req, res) => {
+  console.log(`🗑️ 用户 ${req.user.username} 删除房间 ${req.params.roomId}`);
+  try {
+    const db = getPool();
+    const { roomId } = req.params;
+
+    // 先查找房间的数据库ID
+    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在' });
+    }
+    const roomDbId = roomResult.rows[0].id;
+
+    // 开始事务
+    await db.query('BEGIN');
+
+    try {
+      // 删除房间相关的所有数据
+      // 1. 删除消息
+      await db.query('DELETE FROM messages WHERE room_id = $1', [roomDbId]);
+      // 2. 删除房间成员
+      await db.query('DELETE FROM room_members WHERE room_id = $1', [roomDbId]);
+      // 3. 删除申请
+      await db.query('DELETE FROM applications WHERE room_id = $1', [roomDbId]);
+      // 4. 删除房间
+      const deleteResult = await db.query('DELETE FROM rooms WHERE id = $1', [roomDbId]);
+
+      await db.query('COMMIT');
+
+      if (deleteResult.rowCount > 0) {
+        res.json({ message: '房间删除成功' });
+      } else {
+        res.status(404).json({ error: '房间不存在' });
+      }
+    } catch (err) {
+      await db.query('ROLLBACK');
+      throw err;
+    }
+
+  } catch (err) {
+    console.error('❌ 删除房间错误:', err.message);
+    res.status(500).json({ error: '删除房间失败: ' + err.message });
   }
 });
 // ======== 10. 错误处理 ========
