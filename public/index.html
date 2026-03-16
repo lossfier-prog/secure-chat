@@ -1050,12 +1050,24 @@ async function loadMyRooms() {
       list.innerHTML = '<p>加载中...</p>';
 
       try {
+        // 重新获取最新的token
+        token = localStorage.getItem('token');
+        if (!token) {
+          list.innerHTML = '<p>请先登录</p>';
+          return;
+        }
+
         let allApplications = [];
         let errors = [];
         let serverAvailable = true;
 
+        console.log('🔍 开始加载申请列表');
+        console.log('🔑 当前token:', token ? '存在' : '不存在');
+        console.log('🔑 Token长度:', token.length);
+
         // 1. 获取用户自己提交的申请（优先加载，因为这个功能正常）
         try {
+          console.log('📋 尝试获取个人申请');
           const myAppsResponse = await fetch('/my-applications', {
             headers: { 
               'Authorization': `Bearer ${token}`,
@@ -1063,14 +1075,18 @@ async function loadMyRooms() {
             }
           });
           
+          console.log('📋 个人申请API响应状态:', myAppsResponse.status);
+          
           if (myAppsResponse.ok) {
             try {
               const myApps = await myAppsResponse.json();
+              console.log('📋 个人申请数据:', myApps);
               // 为每个申请添加类型标记
               myApps.forEach(app => {
                 app.type = 'myApplication'; // 标记为自己的申请
               });
               allApplications = [...allApplications, ...myApps];
+              console.log('📋 个人申请添加后总数:', allApplications.length);
             } catch (jsonErr) {
               console.error('解析个人申请数据失败:', jsonErr);
               errors.push('个人申请数据解析失败');
@@ -1088,6 +1104,7 @@ async function loadMyRooms() {
         // 2. 获取用户作为房主需要审核的申请
         if (serverAvailable) {
           try {
+            console.log('🏠 尝试获取房间列表');
             const roomsResponse = await fetch('/my-rooms', {
               headers: { 
                 'Authorization': `Bearer ${token}`,
@@ -1095,13 +1112,17 @@ async function loadMyRooms() {
               }
             });
             
+            console.log('🏠 房间列表API响应状态:', roomsResponse.status);
+            
             if (roomsResponse.ok) {
               try {
                 const rooms = await roomsResponse.json();
+                console.log('🏠 房间列表数据:', rooms);
                 
                 // 为每个房间获取待审核的申请
                 for (const room of rooms) {
                   try {
+                    console.log(`🔍 尝试获取房间 ${room.roomId} 的申请`);
                     const appsResponse = await fetch(`/rooms/${room.roomId}/applications`, {
                       headers: { 
                         'Authorization': `Bearer ${token}`,
@@ -1109,15 +1130,19 @@ async function loadMyRooms() {
                       }
                     });
 
+                    console.log(`🔍 房间 ${room.roomId} 申请API响应状态:`, appsResponse.status);
+                    
                     if (appsResponse.ok) {
                       try {
                         const apps = await appsResponse.json();
+                        console.log(`🔍 房间 ${room.roomId} 申请数据:`, apps);
                         // 为每个申请添加房间信息
                         apps.forEach(app => {
                           app.roomId = room.roomId;
                           app.type = 'toReview'; // 标记为需要审核的申请
                         });
                         allApplications = [...allApplications, ...apps];
+                        console.log(`🔍 房间 ${room.roomId} 申请添加后总数:`, allApplications.length);
                       } catch (jsonErr) {
                         console.error(`解析房间 ${room.roomId} 申请数据失败:`, jsonErr);
                         // 继续处理其他房间，不因为一个房间的错误而停止
@@ -1141,6 +1166,10 @@ async function loadMyRooms() {
             errors.push('房间列表获取失败');
           }
         }
+
+        console.log('📊 最终申请总数:', allApplications.length);
+        console.log('❌ 错误列表:', errors);
+        console.log('🌐 服务器可用状态:', serverAvailable);
 
         if (allApplications.length === 0) {
           if (errors.length > 0) {
