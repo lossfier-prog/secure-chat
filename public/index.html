@@ -1,1263 +1,1146 @@
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>安全聊天室</title>
-  <style>
-    body { 
-      font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; 
-      max-width: 600px; 
-      margin: 20px auto; 
-      padding: 0 15px;
-      background: #f9f9f9;
-      color: #333;
+// ======== 1. 基础设置 ========
+const http = require('http');
+const express = require('express');
+const WebSocket = require('ws');
+const { Pool } = require('pg');
+const bcrypt = require('bcrypt');
+const path = require('path');
+const fs = require('fs');
+// 👉 必须放在所有路由之前！
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secure-jwt-secret-key-here'; // 与你生成token时用的密钥一致
+
+// 定义JWT验证中间件
+const authenticateJWT = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: '未提供授权令牌' });
+
+    const token = authHeader.split(' ')[1];
+    if (!token) return res.status(401).json({ error: '无效的令牌格式' });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded; // 将用户信息附加到req对象
+    next(); // 继续执行后续路由
+  } catch (err) {
+    console.error('JWT验证失败:', err.message);
+    res.status(401).json({ error: '无效或过期的令牌' });
+  }
+};
+// ======== 2. 立即输出日志（验证应用启动） ========
+console.log('\n');
+console.log('========================================');
+console.log('🚀 EXPRESS APPLICATION STARTING...');
+console.log('========================================');
+console.log(`Time: ${new Date().toISOString()}`);
+console.log(`Node: ${process.version}`);
+console.log(`CWD: ${process.cwd()}`);
+console.log(`PORT: ${process.env.PORT || 8080}`);
+console.log('========================================\n');
+
+// ======== 3. 创建 Express 应用 ========
+const app = express();
+
+// 中间件
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// CORS 配置
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// ======== 4. 配置常量 ========
+const PORT = process.env.PORT || 8080;
+const SALT_ROUNDS = 10;
+
+// 👇👇👇 新增这一行（非常重要！）👇👇👇
+const publicPath = path.join(__dirname, 'public');   // 全局路径
+/**
+ * 生成唯一房间号 (8位字母+数字)
+ */
+function generateRoomId() {
+  return Math.random().toString(36).substring(2, 10).toUpperCase();
+}
+// ======== 5. 数据库连接 ========
+let pool = null;
+
+function getPool() {
+  if (pool) return pool;
+  
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) {
+    console.error('❌ DATABASE_URL 环境变量缺失！');
+    return null;
+  }
+  
+  pool = new Pool({
+    connectionString: dbUrl,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    connectionTimeoutMillis: 5000
+  });
+  
+  pool.on('error', (err) => {
+    console.error('❌ 数据库连接错误:', err.message);
+  });
+  
+  return pool;
+}
+
+// ======== 6. 健康检查端点（最重要！） ========
+app.get('/health', (req, res) => {
+  console.log(`🏥 健康检查 [${new Date().toISOString()}]`);
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    port: PORT
+  });
+});
+// ======================================================
+// 中间件：验证 JWT 并解析用户
+// ======================================================
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: '未授权' });
+
+  const token = authHeader.split(' ')[1];
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: '无效令牌' });
+    req.user = user;          // 挂载用户资料到 req 上
+    next();
+  });
+};
+
+// 中间件：仅管理员可访问
+const adminOnly = (req, res, next) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: '需要管理员权限' });
+  }
+  next();
+};
+
+// 中间件：仅房间所有者可访问
+const roomOwnerOnly = async (req, res, next) => {
+  const roomId = req.params.roomId;           // 从 URL 获取房间ID
+  if (!roomId) return res.status(400).json({ error: '缺少房间ID' });
+
+  const db = getPool();
+  // 先查找房间的数据库ID
+  const room = await db.query('SELECT owner_id FROM rooms WHERE room_id = $1', [roomId]);
+  
+  if (room.rows.length === 0) {
+    return res.status(404).json({ error: '房间不存在' });
+  }
+  
+  // 当前用户是否是该房间所有者？
+  if (room.rows[0].owner_id !== req.user.userId) {
+    return res.status(403).json({ error: '只有房间所有者可操作' });
+  }
+  
+  next();
+};
+// ======== 7. API 路由 ========
+
+// 注册
+app.post('/register', async (req, res) => {
+  console.log('📝 收到注册请求');
+  try {
+    const { username, password, inviteCode } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: '用户名和密码必填' });
     }
     
-    .container {
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 2px 15px rgba(0,0,0,0.08);
-      padding: 20px;
-    }
-
-    h1 {
-      text-align: center;
-      color: #2c3e50;
-      margin-bottom: 5px;
-    }
-
-    .subtitle {
-      text-align: center;
-      color: #7f8c8d;
-      font-size: 14px;
-      margin-bottom: 25px;
-    }
-
-    .card {
-      background: #f8f9fa;
-      border-radius: 10px;
-      padding: 15px;
-      margin-bottom: 20px;
-      border: 1px solid #e9ecef;
-    }
-
-    input, button {
-      padding: 10px 12px;
-      margin: 8px 0;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      width: 100%;
-      box-sizing: border-box;
-      font-size: 14px;
-    }
-
-    button {
-      background: #3498db;
-      color: white;
-      border: none;
-      cursor: pointer;
-      font-weight: 500;
-      transition: background 0.3s;
-    }
-
-    button:hover {
-      background: #2980b9;
-    }
-
-    button:disabled {
-      background: #bdc3c7;
-      cursor: not-allowed;
-    }
-
-    .error {
-      color: #e74c3c;
-      font-size: 13px;
-      margin: 5px 0;
-      min-height: 18px;
-    }
-
-    #chatBox {
-      border: 1px solid #e0e0e0;
-      height: 280px;
-      overflow-y: auto;
-      margin: 15px 0;
-      padding: 12px;
-      background: #fcfcfc;
-      border-radius: 8px;
-      font-size: 14px;
-    }
-
-    .msg {
-      margin: 8px 0;
-      line-height: 1.4;
-    }
-
-    .system {
-      color: #7f8c8d;
-      font-style: italic;
-      text-align: center;
-      font-size: 12px;
-      margin: 15px 0;
-    }
-
-    .user-msg {
-      background: #e8f4fc;
-      padding: 8px 12px;
-      border-radius: 18px;
-      max-width: 85%;
-      margin-left: auto;
-    }
-
-    .other-msg {
-      background: #f1f1f1;
-      padding: 8px 12px;
-      border-radius: 18px;
-      max-width: 85%;
-    }
-
-    .hidden { display: none; }
-
-    .room-item {
-      background: white;
-      border: 1px solid #e0e0e0;
-      border-radius: 8px;
-      padding: 12px;
-      margin: 10px 0;
-      transition: all 0.2s;
-    }
-
-    .room-item:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 8px rgba(0,0,0,0.05);
-    }
-
-    .room-id {
-      font-weight: bold;
-      color: #2c3e50;
-      margin-bottom: 5px;
-    }
-
-    .room-meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 12px;
-      color: #7f8c8d;
-    }
-
-    .badge {
-      background: #e74c3c;
-      color: white;
-      padding: 2px 8px;
-      border-radius: 10px;
-      font-size: 12px;
-    }
-
-    .btn-small {
-      padding: 5px 10px;
-      font-size: 13px;
-      background: #2ecc71;
-      width: auto;
-    }
-
-    .audit-item {
-      padding: 12px;
-      border-bottom: 1px solid #eee;
-    }
-
-    .audit-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-    }
-
-    .btn-approve {
-      background: #2ecc71;
-      flex: 1;
-    }
-
-    .btn-reject {
-      background: #e74c3c;
-      flex: 1;
-    }
-
-    .user-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 15px;
-      padding-bottom: 10px;
-      border-bottom: 1px solid #eee;
-    }
-
-    .logout-btn {
-      background: #e74c3c;
-      padding: 5px 12px;
-      font-size: 13px;
-      width: auto;
-    }
-
-    .nav-tabs {
-      display: flex;
-      margin-bottom: 15px;
-      border-bottom: 1px solid #eee;
-    }
-
-    .nav-tab {
-      padding: 8px 15px;
-      cursor: pointer;
-      border-bottom: 3px solid transparent;
-    }
-
-    .nav-tab.active {
-      border-bottom: 3px solid #3498db;
-      color: #3498db;
-      font-weight: 500;
-    }
-
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
-    
-    /* 管理员面板样式 */
-    #adminPanel {
-      margin-top: 15px;
-      padding: 15px;
-      background: #f0f7ff;
-      border: 1px solid #d6e9ff;
-      border-radius: 8px;
+    const db = getPool();
+    if (!db) {
+      return res.status(500).json({ error: '数据库连接失败' });
     }
     
-    #adminPanel h3 {
-      margin-top: 0;
-      color: #2c3e50;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    // 检查用户名是否存在
+    const existing = await db.query('SELECT id FROM users WHERE username = $1', [username]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: '用户名已存在' });
     }
     
-    #adminPanel table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 10px;
-    }
+    // 创建用户
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+    const result = await db.query(
+      'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id',
+      [username, passwordHash]
+    );
     
-    #adminPanel th {
-      background: #e3f2fd;
-      padding: 8px;
-      text-align: left;
-    }
+    const token = jwt.sign(
+      { userId: result.rows[0].id, username },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
     
-    #adminPanel td {
-      padding: 8px;
-      border-bottom: 1px solid #eee;
-    }
-    
-    @media (max-width: 480px) {
-      body { padding: 10px; }
-      .container { padding: 15px; }
-      input, button { padding: 8px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>🔐 安全聊天室</h1>
-    <p class="subtitle">邀请码注册 · 房主审核 · 端到端加密</p>
-
-    <!-- 认证区域 -->
-    <div id="authSection">
-      <div class="card">
-        <input type="text" id="username" placeholder="用户名">
-        <input type="password" id="password" placeholder="密码">
-        
-        <div id="inviteField">
-          <input type="text" id="inviteCode" placeholder="邀请码（注册时需要）">
-        </div>
-
-        <button onclick="register()">注册</button>
-        <button onclick="login()">登录</button>
-        
-        <div class="error" id="authMsg"></div>
-      </div>
-    </div>
-
-    <!-- 聊天区域 -->
-    <div id="chatSection" class="hidden">
-      <div class="user-header">
-        <div>你好，<strong id="currentUsername"></strong>！</div>
-        <button class="logout-btn" onclick="logout()">退出</button>
-      </div>
-
-      <div class="nav-tabs">
-        <div class="nav-tab active" data-tab="chat" onclick="switchTab('chat')">聊天</div>
-        <div class="nav-tab" data-tab="myRooms" onclick="switchTab('myRooms')">我的房间</div>
-        <div class="nav-tab" data-tab="audit" onclick="switchTab('audit')">审核中心</div>
-      </div>
-
-      <!-- 聊天标签页 -->
-      <div id="chatTab" class="tab-content active">
-        <div id="chatBox"></div>
-        
-        <div style="margin-top: 15px;">
-  <input type="text" id="roomIdInput" placeholder="输入房间号（例如ABC12345）">
-  <button onclick="applyToJoinRoom()">申请加入房间</button>
-  <div class="error" id="joinError" style="margin-top: 5px;"></div>
-</div>
-
-        <div style="margin-top: 15px;">
-          <input type="text" id="messageInput" placeholder="输入消息..." disabled>
-          <button onclick="sendMessage()" id="sendBtn" disabled>发送</button>
-        </div>
-      </div>
-
-     <!-- 我的房间标签页 -->
-<div id="myRoomsTab" class="tab-content">
-  <h3>🏠 我的房间</h3>
-
-  <!-- 添加创建房间按钮 -->
-  <div style="margin-bottom: 20px;">
-    <button onclick="createRoom()" style="padding: 10px 20px; width: 100%; background: #4CAF50;">
-      📦 创建新房间
-    </button>
-  </div>
-
-  <div id="myRoomsList">
-    <!-- 房间列表将自动加载 -->
-  </div>
-</div>
-
-      <!-- 审核中心标签页 -->
-      <div id="auditTab" class="tab-content">
-        <h3>📬 审核中心</h3>
-        <div id="applicationsList">
-          <!-- 申请列表将自动加载 -->
-        </div>
-      </div>
-      
-      <!-- 管理员面板 -->
-      <div id="adminPanel" class="hidden">
-        <h3>🛡️ 管理员面板</h3>
-        
-        <div>
-          <button onclick="generateInviteCode()" class="btn" style="background:#9b59b6">
-            ✨ 生成新邀请码
-          </button>
-          <div id="newInviteCode" style="margin:10px 0; min-height:24px; color:#9b59b6; font-weight:bold;"></div>
-        </div>
-
-        <h4 style="margin:15px 0 10px;">历史邀请码（最近50条）</h4>
-        <div id="inviteCodesList" style="max-height:200px; overflow-y:auto;"></div>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    /* ==================== 全局变量 ==================== */
-    let ws = null;
-    let token = localStorage.getItem('token');
-    let currentUsername = '';
-
-    /* DOM 元素 */
-    const authSection = document.getElementById('authSection');
-    const chatSection = document.getElementById('chatSection');
-    const authMsg = document.getElementById('authMsg');
-    const currentUsernameEl = document.getElementById('currentUsername');
-    const messageInput = document.getElementById('messageInput');
-    const sendBtn = document.getElementById('sendBtn');
-
-    /* ==================== 页面初始化 ==================== */
-  // 修改后的完整JavaScript代码
-document.addEventListener('DOMContentLoaded', () => {
-  // 立即检查登录状态
-  checkAuth();
-
-  // 每次页面加载时都尝试加载数据
-  if (token) {
-    loadUserData();
+    console.log(`✅ 用户注册成功: ${username}`);
+    res.json({ token });
+  } catch (err) {
+    console.error('❌ 注册错误:', err.message);
+    res.status(500).json({ error: '注册失败: ' + err.message });
   }
 });
 
-// 修改后的checkAuth函数
-function checkAuth() {
-  token = localStorage.getItem('token');
-  if (token) {
-    try {
-      // 验证token是否过期
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      currentUsername = payload.username;
-      currentUsernameEl.textContent = currentUsername;
-
-      // 检查管理员权限
-      if (payload.role === 'admin' && document.getElementById('adminPanel')) {
-        document.getElementById('adminPanel').classList.remove('hidden');
-      }
-
-      // 显示聊天区域，隐藏认证区域
-      authSection.classList.add('hidden');
-      chatSection.classList.remove('hidden');
-
-      return true;
-    } catch (e) {
-      console.error('Invalid token:', e);
-      logout();
-      return false;
+// 登录
+app.post('/login', async (req, res) => {
+  console.log('🔑 收到登录请求');
+  try {
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: '用户名和密码必填' });
     }
+    
+    const db = getPool();
+    if (!db) {
+      return res.status(500).json({ error: '数据库连接失败' });
+    }
+    
+    const result = await db.query('SELECT * FROM users WHERE username = $1', [username]);
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: '用户名或密码错误' });
+    }
+    
+    const user = result.rows[0];
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+      return res.status(400).json({ error: '用户名或密码错误' });
+    }
+    
+    const token = jwt.sign(
+      { userId: user.id, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    console.log(`✅ 用户登录成功: ${username}`);
+    res.json({ token });
+  } catch (err) {
+    console.error('❌ 登录错误:', err.message);
+    res.status(500).json({ error: '登录失败: ' + err.message });
+  }
+});
+//获取房间列表
+app.get('/my-rooms', authenticateToken, async (req, res) => {
+  console.log('🏠 获取房间列表');
+  try {
+    const db = getPool();
+    // 按创建时间倒序，最新创建的房间排在最前面
+    const result = await db.query(
+      `SELECT id, room_id, created_at FROM rooms 
+       WHERE owner_id = $1 
+       ORDER BY created_at DESC`,
+      [req.user.userId]
+    );
+
+    // 同时查询每个房间的待审核申请数量
+    const roomsWithPending = await Promise.all(result.rows.map(async room => {
+      const pendingRes = await db.query(
+        `SELECT COUNT(*) FROM applications 
+         WHERE room_id = $1 AND status = 'pending'`,
+        [room.id]
+      );
+      return {
+        id: room.id,
+        roomId: room.room_id,
+        createdAt: room.created_at,
+        pendingCount: parseInt(pendingRes.rows[0].count)
+      };
+    }));
+
+    res.json(roomsWithPending);
+  } catch (err) {
+    console.error('❌ 获取房间错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 获取申请列表
+app.get('/my-applications', authenticateToken, async (req, res) => {
+  console.log('📋 获取申请列表');
+  try {
+    const db = getPool();
+    const applications = await db.query(`
+      SELECT 
+        a.id, 
+        a.status,
+        r.room_id,
+        u.username AS room_owner
+      FROM applications a
+      JOIN rooms r ON a.room_id = r.id
+      JOIN users u ON r.owner_id = u.id
+      WHERE a.applicant_id = $1
+      ORDER BY a.created_at DESC
+    `, [req.user.userId]);
+
+    res.json(applications.rows);
+  } catch (err) {
+    console.error('❌ 获取申请列表错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ======================================================
+// 管理员路由 — 仅管理员可访问！
+// ======================================================
+
+// 获取所有邀请码列表
+app.get('/admin/invite-codes', authenticateToken, adminOnly, async (req, res) => {
+  console.log('🛡️ 获取邀请码列表');
+  try {
+    const db = getPool();
+    const result = await db.query('SELECT id, code, used, created_at FROM invite_codes');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ 获取邀请码错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 生成新邀请码（仅管理员）
+app.post('/admin/generate-invite', authenticateToken, adminOnly, async (req, res) => {
+  console.log('🛡️ 生成邀请码');
+  try {
+    const db = getPool();
+    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+
+    await db.query(
+      'INSERT INTO invite_codes (code) VALUES ($1)',
+      [code]
+    );
+
+    res.json({ inviteCode: code });
+  } catch (err) {
+    console.error('❌ 生成邀请码错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// ======== 8. 静态文件服务 ========
+console.log(`📁 静态文件路径: ${publicPath}`); // ✅ 此处已使用全局变量
+
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+  console.log('✅ 静态文件目录存在');
+} else {
+  console.warn('⚠️ 静态文件目录不存在，将自动创建');
+  fs.mkdirSync(publicPath, { recursive: true });
+}
+// ======== 9. SPA 回退路由（必须在最后！） ========
+app.get('*', (req, res) => {
+  const indexPath = path.join(publicPath, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
   } else {
-    authSection.classList.remove('hidden');
-    chatSection.classList.add('hidden');
+    res.status(404).send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>安全聊天室</title></head>
+      <body style="font-family: Arial; text-align: center; padding: 50px;">
+        <h1>🔐 安全聊天室</h1>
+        <p>服务器正在运行，但 index.html 尚未部署。</p>
+        <p>请将前端文件放入 public/ 目录。</p>
+        <hr>
+        <p><a href="/health">健康检查</a></p>
+      </body>
+      </html>
+    `);
+  }
+});
+// ======================================================
+// 房间管理 — 认证后可用
+// ======================================================
+
+// 创建新房间
+app.post('/rooms', authenticateToken, async (req, res) => {
+  console.log(`🏠 用户 ${req.user.username} 创建房间`);
+  try {
+    const db = getPool();
+    const roomId = generateRoomId();   // 生成唯一房间号
+
+    const result = await db.query(
+      `INSERT INTO rooms (room_id, owner_id) 
+       VALUES ($1, $2) 
+       RETURNING id, room_id`,
+      [roomId, req.user.userId]
+    );
+
+    // 自动将创建者加入房间成员
+    await db.query(
+      `INSERT INTO room_members (room_id, user_id) 
+       VALUES ($1, $2)`,
+      [result.rows[0].id, req.user.userId]
+    );
+
+    res.json({
+      id: result.rows[0].id,
+      roomId: result.rows[0].room_id,
+      message: "房间创建成功！其他用户可用该房间号申请加入。"
+    });
+
+  } catch (err) {
+    console.error('❌ 创建房间错误:', err.message);
+    res.status(500).json({ error: '创建房间失败: ' + err.message });
+  }
+});
+
+// 删除房间
+app.delete('/rooms/:roomId', authenticateToken, roomOwnerOnly, async (req, res) => {
+  console.log(`🗑️ 用户 ${req.user.username} 删除房间 ${req.params.roomId}`);
+  try {
+    const db = getPool();
+    const { roomId } = req.params;
+
+    // 先查找房间的数据库ID
+    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在' });
+    }
+    const roomDbId = roomResult.rows[0].id;
+
+    // 开始事务
+    await db.query('BEGIN');
+
+    try {
+      // 删除房间相关的所有数据
+      // 1. 删除消息
+      await db.query('DELETE FROM messages WHERE room_id = $1', [roomDbId]);
+      // 2. 删除房间成员
+      await db.query('DELETE FROM room_members WHERE room_id = $1', [roomDbId]);
+      // 3. 删除申请
+      await db.query('DELETE FROM applications WHERE room_id = $1', [roomDbId]);
+      // 4. 删除房间
+      const deleteResult = await db.query('DELETE FROM rooms WHERE id = $1', [roomDbId]);
+
+      await db.query('COMMIT');
+
+      if (deleteResult.rowCount > 0) {
+        res.json({ message: '房间删除成功' });
+      } else {
+        res.status(404).json({ error: '房间不存在' });
+      }
+    } catch (err) {
+      await db.query('ROLLBACK');
+      throw err;
+    }
+
+  } catch (err) {
+    console.error('❌ 删除房间错误:', err.message);
+    res.status(500).json({ error: '删除房间失败: ' + err.message });
+  }
+});
+// ======== 10. 错误处理 ========
+app.use((err, req, res, next) => {
+  console.error('💥 服务器错误:', err.message);
+  if (!res.headersSent) {
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+// 申请加入某个房间
+app.post('/rooms/:roomId/join', authenticateToken, async (req, res) => {
+  console.log(`📩 用户 ${req.user.username} 申请加入房间 ${req.params.roomId}`);
+  try {
+    const db = getPool();
+    const { roomId } = req.params;
+
+    // 1. 检查房间是否存在
+    const room = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (room.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在！' });
+    }
+    const roomDbId = room.rows[0].id;
+
+    // 2. 避免重复申请
+    const existApp = await db.query(
+      `SELECT id FROM applications 
+       WHERE room_id = $1 AND applicant_id = $2 AND status = 'pending'`,
+      [roomDbId, req.user.userId]
+    );
+    if (existApp.rows.length > 0) {
+      return res.status(400).json({ error: '您已提交申请，请耐心等待审核' });
+    }
+
+    // 3. 创建申请记录
+    await db.query(
+      `INSERT INTO applications (room_id, applicant_id) 
+       VALUES ($1, $2)`,
+      [roomDbId, req.user.userId]
+    );
+
+    res.json({ message: '申请已提交！房间所有者会尽快审核。' });
+
+  } catch (err) {
+    console.error('❌ 申请加入错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// 获取该房间的所有 pending 申请 （仅房间所有者）
+app.get('/rooms/:roomId/applications', 
+  authenticateToken, 
+  roomOwnerOnly, 
+  async (req, res) => 
+{
+  console.log(`📋 房间 ${req.params.roomId} 申请列表`);
+  try {
+    const db = getPool();
+    const { roomId } = req.params;
+
+    // 先查找房间的数据库ID
+    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在' });
+    }
+    const roomDbId = roomResult.rows[0].id;
+
+    const applications = await db.query(`
+      SELECT 
+        a.id, 
+        a.status,
+        u.id AS user_id,
+        u.username
+      FROM applications a
+      JOIN users u ON a.applicant_id = u.id
+      WHERE a.room_id = $1 AND a.status = 'pending'
+      ORDER BY a.created_at DESC
+    `, [roomDbId]);
+
+    res.json(applications.rows);
+  } catch (err) {
+    console.error('❌ 获取申请列表错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// 批准某条申请
+app.post('/applications/:appId/approve', 
+  authenticateToken, 
+  async (req, res) => 
+{
+  console.log(`✅ 批准申请 ${req.params.appId}`);
+  try {
+    const db = getPool();
+    const { appId } = req.params;
+
+    // 1. 获取申请详情
+    const app = await db.query(
+      `SELECT room_id, applicant_id 
+       FROM applications 
+       WHERE id = $1 AND status = 'pending'`,
+      [appId]
+    );
+    
+    if (app.rows.length === 0) {
+      return res.status(404).json({ error: '申请不存在或已处理' });
+    }
+
+    const { room_id, applicant_id } = app.rows[0];
+
+    // 2. 验证操作者是房间所有者
+    const room = await db.query('SELECT owner_id FROM rooms WHERE id = $1', [room_id]);
+    if (room.rows[0].owner_id !== req.user.userId) {
+      return res.status(403).json({ error: '无权操作该申请！' });
+    }
+
+    // 3. 更新申请状态 + 加入房间成员
+    await db.query('BEGIN');
+    await db.query(
+      `UPDATE applications SET status = 'approved' WHERE id = $1`,
+      [appId]
+    );
+    await db.query(
+      `INSERT INTO room_members (room_id, user_id) 
+       VALUES ($1, $2) 
+       ON CONFLICT DO NOTHING`,   // 避免重复加入
+      [room_id, applicant_id]
+    );
+    await db.query('COMMIT');
+
+    res.json({ message: '申请已批准，用户已加入房间！' });
+
+  } catch (err) {
+    await db.query('ROLLBACK');
+    console.error('❌ 批准申请错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// 拒绝某条申请
+app.post('/applications/:appId/reject', 
+  authenticateToken, 
+  async (req, res) => 
+{
+  console.log(`❌ 拒绝申请 ${req.params.appId}`);
+  try {
+    const db = getPool();
+    const { appId } = req.params;
+
+    // 检查申请是否存在且为 pending
+    const app = await db.query(
+      `SELECT room_id FROM applications 
+       WHERE id = $1 AND status = 'pending'`,
+      [appId]
+    );
+    
+    if (app.rows.length === 0) {
+      return res.status(404).json({ error: '申请不存在或已处理' });
+    }
+
+    // 验证操作者是房间所有者
+    const room = await db.query('SELECT owner_id FROM rooms WHERE id = $1', [app.rows[0].room_id]);
+    if (room.rows[0].owner_id !== req.user.userId) {
+      return res.status(403).json({ error: '无权操作该申请！' });
+    }
+
+    await db.query(
+      `UPDATE applications SET status = 'rejected' WHERE id = $1`,
+      [appId]
+    );
+
+    res.json({ message: '申请已拒绝' });
+
+  } catch (err) {
+    console.error('❌ 拒绝申请错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 获取房间历史消息
+app.get('/rooms/:roomId/messages', authenticateToken, async (req, res) => {
+  console.log(`📜 获取房间 ${req.params.roomId} 历史消息`);
+  try {
+    const db = getPool();
+    const { roomId } = req.params;
+    const { limit = 50, offset = 0 } = req.query;
+
+    // 查找房间ID
+    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在' });
+    }
+
+    const roomDbId = roomResult.rows[0].id;
+
+    // 验证用户是否是房间成员
+    const memberResult = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomDbId, req.user.userId]);
+    if (memberResult.rows.length === 0) {
+      return res.status(403).json({ error: '您不是该房间的成员' });
+    }
+
+    // 获取消息，按时间倒序，最新的消息在前面
+    const messages = await db.query(`
+      SELECT 
+        m.id, 
+        m.content, 
+        m.created_at, 
+        u.username
+      FROM messages m
+      JOIN users u ON m.user_id = u.id
+      WHERE m.room_id = $1
+      ORDER BY m.created_at DESC
+      LIMIT $2 OFFSET $3
+    `, [roomDbId, parseInt(limit), parseInt(offset)]);
+
+    // 反转消息顺序，使最早的消息在前面
+    const reversedMessages = messages.rows.reverse();
+
+    res.json(reversedMessages);
+
+  } catch (err) {
+    console.error('❌ 获取消息错误:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// ======== 11. 创建 HTTP 服务器 ========
+const server = http.createServer(app);
+
+// ======== 12. WebSocket 服务器 ========
+const wss = new WebSocket.Server({ server });
+
+// 用户连接与房间的映射
+const userConnections = new Map();
+const roomOwners = new Map(); // 房间id -> 房主的WebSocket连接
+
+wss.on('connection', (socket, req) => {
+  let userId = null;
+  let username = null;
+
+  console.log('🔌 新WebSocket连接');
+
+  // 验证token（从query参数或cookie中获取）
+  const token = req.url.split('token=')[1];
+  if (!token) {
+    socket.close(1008, '未授权');
+    return;
+  }
+
+  try {
+    const decoded = jwt.verify(token.split('&')[0], JWT_SECRET);
+    userId = decoded.userId;
+    username = decoded.username;
+
+    // 保存用户连接信息
+    userConnections.set(userId, socket);
+    socket.userId = userId;
+    socket.username = username;
+
+    socket.send(JSON.stringify({
+      type: 'system',
+      text: `👋 欢迎 ${username}，你已连接到聊天服务器`
+    }));
+  } catch (err) {
+    console.error('WebSocket验证失败:', err);
+    socket.close(1008, '无效token');
+    return;
+  }
+
+  socket.on('message', async (msg) => {
+    try {
+      const data = JSON.parse(msg);
+
+      console.log(`📨 收到消息 (${username}):`, data.type);
+
+      // 处理加入房间申请通知
+      if (data.type === 'application_submitted' && data.roomId) {
+        const db = getPool();
+
+        // 查找该房间的所有者
+        const roomResult = await db.query(
+          'SELECT owner_id FROM rooms WHERE room_id = $1',
+          [data.roomId]
+        );
+
+        if (roomResult.rows.length > 0) {
+          const ownerId = roomResult.rows[0].owner_id;
+
+          // 查找房主是否在线
+          if (userConnections.has(ownerId)) {
+            const ownerSocket = userConnections.get(ownerId);
+            if (ownerSocket.readyState === WebSocket.OPEN) {
+              ownerSocket.send(JSON.stringify({
+                type: 'new_application',
+                roomId: data.roomId,
+                applicantName: username,
+                message: `用户 ${username} 申请加入房间 ${data.roomId}`
+              }));
+            }
+          }
+        }
+      }
+      // 处理其他消息类型...
+      else if (data.type === 'chatMessage') {
+        // 存储消息到数据库
+        const db = getPool();
+        if (db) {
+          // 查找房间ID
+          db.query('SELECT id FROM rooms WHERE room_id = $1', [data.roomId])
+            .then(roomResult => {
+              if (roomResult.rows.length > 0) {
+                const roomDbId = roomResult.rows[0].id;
+                // 验证用户是否是房间成员
+                return db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomDbId, userId]);
+              }
+              throw new Error('房间不存在');
+            })
+            .then(memberResult => {
+              if (memberResult.rows.length > 0) {
+                const roomDbId = memberResult.rows[0].room_id;
+                // 存储消息
+                return db.query(
+                  'INSERT INTO messages (room_id, user_id, content) VALUES ($1, $2, $3) RETURNING id, created_at',
+                  [roomDbId, userId, data.message]
+                );
+              }
+              throw new Error('您不是该房间的成员');
+            })
+            .then(async () => {
+              // 转发聊天消息
+              await broadcastToRoom(data.roomId, {
+                type: 'chatMessage',
+                from: username,
+                message: data.message,
+                timestamp: new Date().toISOString()
+              });
+            })
+            .catch(err => {
+              console.error('存储消息错误:', err.message);
+              socket.send(JSON.stringify({
+                type: 'error',
+                message: err.message
+              }));
+            });
+        }
+      }
+      // 其他消息类型处理...
+    } catch (err) {
+      console.error('处理WebSocket消息错误:', err);
+    }
+  });
+
+  socket.on('close', () => {
+    if (userId) {
+      console.log(`👋 用户断开连接: ${username}`);
+      userConnections.delete(userId);
+
+      // 如果是房主，从roomOwners中移除
+      for (let [roomId, ownerId] of roomOwners.entries()) {
+        if (ownerId === userId) {
+          roomOwners.delete(roomId);
+        }
+      }
+    }
+  });
+});
+wss.onmessage = (event) => {
+  try {
+    const data = JSON.parse(event.data);
+    const chatBox = document.getElementById('chatBox');
+
+    // 已有的消息处理...
+
+    // 添加审核结果通知处理
+    if (data.type === 'application_approved') {
+      addSystemMessage(`✅ 你的申请已通过！已加入房间 ${data.roomId}`);
+      // 可选：自动加入房间
+    }
+    else if (data.type === 'application_rejected') {
+      addSystemMessage(`❌ 你的申请已被拒绝: ${data.message || ''}`);
+    }
+    else if (data.type === 'new_application') {
+      addSystemMessage(`📩 收到新申请: ${data.message}`);
+      loadApplications(); // 刷新申请列表
+    }
+  } catch (err) {
+    console.error('处理消息错误:', err);
+  }
+};
+// 广播消息到房间
+async function broadcastToRoom(roomId, message) {
+  if (!roomId) return;
+
+  try {
+    const db = getPool();
+    if (!db) return;
+
+    // 查找房间ID
+    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
+    if (roomResult.rows.length === 0) return;
+
+    const roomDbId = roomResult.rows[0].id;
+
+    // 获取房间所有成员
+    const membersResult = await db.query('SELECT user_id FROM room_members WHERE room_id = $1', [roomDbId]);
+    const memberIds = membersResult.rows.map(row => row.user_id);
+
+    // 只向房间成员发送消息
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN && client.userId && memberIds.includes(client.userId)) {
+        client.send(JSON.stringify(message));
+      }
+    });
+  } catch (err) {
+    console.error('广播消息错误:', err.message);
+  }
+}
+
+// ======== 13. 数据库初始化 ========
+async function initDatabase() {
+  console.log('🔍 初始化数据库...');
+  
+  const db = getPool();
+  if (!db) {
+    console.error('❌ 无法连接数据库');
+    return false;
+  }
+  
+  try {
+    // 测试连接
+    await db.query('SELECT NOW()');
+    console.log('✅ 数据库连接成功');
+    
+    // 创建表
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('   • users 表就绪');
+    
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS rooms (
+        id SERIAL PRIMARY KEY,
+        room_id TEXT UNIQUE NOT NULL,
+        owner_id INTEGER REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('   • rooms 表就绪');
+    
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS invite_codes (
+        id SERIAL PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        used BOOLEAN DEFAULT false,
+        used_by INTEGER REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('   • invite_codes 表就绪');
+    
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS applications (
+        id SERIAL PRIMARY KEY,
+        room_id INTEGER REFERENCES rooms(id),
+        applicant_id INTEGER REFERENCES users(id),
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('   • applications 表就绪');
+
+    // 房间成员表 —— 记录谁在哪个房间
+  await db.query(`
+  CREATE TABLE IF NOT EXISTS room_members (
+    id SERIAL PRIMARY KEY,
+    room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (room_id, user_id)   -- 同一用户不可重复加入同一个房间
+  )
+`);
+console.log('   • room_members 表就绪');
+
+// 聊天消息表
+await db.query(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+console.log('   • messages 表就绪');
+
+// 申请表 —— 已存在，但确保有 status 字段
+await db.query(`
+  ALTER TABLE applications 
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
+`);
+    console.log('✅ 数据库初始化完成');
+    return true;
+  } catch (err) {
+    console.error('❌ 数据库初始化失败:', err.message);
     return false;
   }
 }
 
-// 新增loadUserData函数
-async function loadUserData() {
+// 定期清理3天前的消息
+async function cleanOldMessages() {
   try {
-    // 同时加载所有需要的数据
-    await Promise.all([
-      loadMyRooms(),
-      loadApplications(),
-      connectWebSocket()
-    ]);
+    const db = getPool();
+    if (!db) return;
 
-    // 切换到默认标签页
-    switchTab('chat');
+    // 删除3天前的消息
+    const result = await db.query(
+      'DELETE FROM messages WHERE created_at < NOW() - INTERVAL \'3 days\''
+    );
+
+    console.log(`🧹 清理了 ${result.rowCount} 条3天前的消息`);
   } catch (err) {
-    console.error('加载用户数据错误:', err);
-    showError('加载数据失败，请刷新页面');
+    console.error('清理旧消息错误:', err.message);
   }
 }
 
-// 修改loadMyRooms函数
-async function loadMyRooms() {
-  try {
-    const response = await fetch('/my-rooms', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const rooms = await response.json();
-    const list = document.getElementById('myRoomsList');
-
-    if (!list) {
-      console.warn('未找到房间列表元素');
-      return;
-    }
-
-    if (rooms.length === 0) {
-      list.innerHTML = `
-        <div class="card">
-          <p>你还没有创建任何房间 🎉</p>
-          <button onclick="createRoom()" style="margin-top: 10px;">立即创建房间</button>
-        </div>
-      `;
-      return;
-    }
-
-    let html = '';
-    rooms.forEach(room => {
-      html += `
-        <div class="room-item">
-          <div class="room-id">房间号: ${room.roomId}</div>
-          <div class="room-meta">
-            <span>创建于: ${formatDateTime(room.createdAt)}</span>
-            ${room.pendingCount > 0 ? `<span class="badge">${room.pendingCount} 个待审核</span>` : ''}
-          </div>
-          <div style="display: flex; gap: 10px; margin-top: 10px;">
-            <button class="btn-small" onclick="copyRoomId('${room.roomId}')">复制房间号</button>
-            <button class="btn-small" onclick="enterMyRoom('${room.roomId}')">进入管理</button>
-          </div>
-        </div>
-      `;
-    });
-
-    list.innerHTML = html;
-  } catch (err) {
-    console.error('加载房间列表错误:', err);
-    document.getElementById('myRoomsList').innerHTML = `
-      <div class="error">加载房间列表失败，请刷新页面试试</div>
-    `;
-    throw err;
-  }
-}
-
-// 修改createRoom函数
-async function createRoom() {
-  try {
-    const roomName = prompt('请输入房间名称（可留空使用默认名称）:', '');
-    if (roomName === null) return; // 用户取消
-
-    const response = await fetch('/rooms', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        roomName: roomName || '我的聊天室'
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || '创建房间失败');
-    }
-
-    // 创建成功后
-    alert(`🎉 房间创建成功!\n\n房间号: ${data.roomId}\n\n请保存好这个ID，其他用户需要它才能申请加入。`);
-
-    // 刷新房间列表
-    await loadMyRooms();
-
-    // 切换到"我的房间"标签页
-    switchTab('myRooms');
-  } catch (err) {
-    console.error('创建房间错误:', err);
-    showError(err.message || '创建房间失败');
-  }
-}
-
-// 修改WebSocket连接函数
-function connectWebSocket() {
-  return new Promise((resolve, reject) => {
-    if (ws) {
-      ws.close();
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}?token=${token}`;
-
-    console.log('正在连接WebSocket:', wsUrl);
-    ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      console.log('WebSocket连接成功');
-      messageInput.disabled = false;
-      sendBtn.disabled = false;
-      resolve();
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket连接错误:', error);
-      addSystemMessage('⚠️ 无法连接聊天服务器，实时功能不可用');
-      reject(error);
-    };
-
-    // 保留现有的onmessage和onclose处理
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        // ... 保留现有处理逻辑
-      } catch (err) {
-        console.error('处理消息错误:', err);
-      }
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket连接关闭');
-      messageInput.disabled = true;
-      sendBtn.disabled = true;
-      addSystemMessage('🔌 已断开与服务器的连接');
-    };
+// ======== 14. 启动服务器（关键！） ========
+async function startServer() {
+  console.log('\n🚀 正在启动服务器...');
+  
+  // 初始化数据库（但不阻止启动）
+  await initDatabase().catch(err => {
+    console.warn('⚠️ 数据库初始化警告:', err.message);
+  });
+  
+  // 启动定期清理任务（每24小时执行一次）
+  setInterval(cleanOldMessages, 24 * 60 * 60 * 1000);
+  // 启动时执行一次清理
+  cleanOldMessages();
+  
+  // 关键！监听所有接口
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log('\n========================================');
+    console.log(`✅ 服务器成功启动！`);
+    console.log(`   • 端口: ${PORT}`);
+    console.log(`   • 地址: http://0.0.0.0:${PORT}`);
+    console.log(`   • 健康检查: http://0.0.0.0:${PORT}/health`);
+    console.log('========================================\n');
+  });
+  
+  server.on('error', (err) => {
+    console.error('💥 服务器启动失败:', err.message);
+    process.exit(1);
   });
 }
 
-// 新增复制房间号功能
-function copyRoomId(roomId) {
-  navigator.clipboard.writeText(roomId).then(() => {
-    alert(`房间号已复制: ${roomId}\n\n你可以分享给其他用户申请加入。`);
-  }).catch(err => {
-    console.error('复制失败:', err);
-    prompt('复制房间号:', roomId);
-  });
-}
+// ======== 15. 全局错误处理 ========
+process.on('uncaughtException', (err) => {
+  console.error('💥 未捕获异常:', err.message);
+  console.error(err.stack);
+});
 
-// 修改switchTab函数
-function switchTab(tabName) {
-  // 隐藏所有标签页内容
-  document.querySelectorAll('.tab-content').forEach(el => {
-    el.classList.remove('active');
-  });
-
-  // 移除所有标签的active类
-  document.querySelectorAll('.nav-tab').forEach(tab => {
-    tab.classList.remove('active');
-  });
-
-  // 激活选中的标签和内容
-  document.querySelector(`.nav-tab[data-tab="${tabName}"]`).classList.add('active');
-  document.getElementById(`${tabName}Tab`).classList.add('active');
-
-  // 根据不同标签页加载数据
-  switch(tabName) {
-    case 'myRooms':
-      loadMyRooms();
-      break;
-    case 'audit':
-      loadApplications();
-      break;
-    // chat标签页不需要特殊加载
-  }
-}
-
-// 修改格式化时间函数
-function formatDateTime(dateTimeStr) {
-  if (!dateTimeStr) return '未知时间';
-
+process.on('unhandledRejection', (reason) => {
+  console.error('💥 未处理的 Promise 拒绝:', reason);
+});
+// 提交加入房间申请
+app.post('/rooms/:roomId/applications', authenticateJWT, async (req, res) => {
   try {
-    const date = new Date(dateTimeStr);
-    if (isNaN(date.getTime())) return dateTimeStr;
+    const { roomId } = req.params;
+    const db = getPool();
 
-    return date.toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).replace(' ', ' ');
-  } catch (e) {
-    console.error('格式化时间错误:', e);
-    return dateTimeStr;
-  }
-}
+    // 检查房间是否存在
+    const roomResult = await db.query(
+      'SELECT id FROM rooms WHERE room_id = $1',
+      [roomId]
+    );
 
-    /* ==================== 认证功能 ==================== */
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在' });
+    }
 
-    function register() {
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
-      const inviteCode = document.getElementById('inviteCode').value.trim();
+    const roomIdNum = roomResult.rows[0].id;
 
-      if (!username || !password || !inviteCode) {
-        showError('所有字段不能为空！');
-        return;
+    // 检查是否已经创建过这个房间
+    const ownerCheck = await db.query(
+      'SELECT * FROM rooms WHERE room_id = $1 AND owner_id = $2',
+      [roomId, req.user.userId]
+    );
+
+    if (ownerCheck.rows.length > 0) {
+      return res.status(400).json({ error: '不能申请加入自己创建的房间' });
+    }
+
+    // 检查是否已经申请过
+    const existingApplication = await db.query(
+      'SELECT * FROM applications WHERE room_id = $1 AND applicant_id = $2',
+      [roomIdNum, req.user.userId]
+    );
+
+    if (existingApplication.rows.length > 0) {
+      return res.status(400).json({ error: '您已经申请过该房间' });
+    }
+
+    // 创建申请
+    const result = await db.query(
+      `INSERT INTO applications
+      (room_id, applicant_id, status)
+      VALUES ($1, $2, $3)
+      RETURNING id, created_at`,
+      [roomIdNum, req.user.userId, 'pending']
+    );
+
+    // 通知房主（如果在线）
+    const ownerResult = await db.query(
+      'SELECT owner_id FROM rooms WHERE id = $1',
+      [roomIdNum]
+    );
+
+    if (ownerResult.rows.length > 0) {
+      const ownerId = ownerResult.rows[0].owner_id;
+      if (userConnections.has(ownerId)) {
+        const ownerSocket = userConnections.get(ownerId);
+        if (ownerSocket.readyState === WebSocket.OPEN) {
+          ownerSocket.send(JSON.stringify({
+            type: 'new_application',
+            roomId: roomId,
+            applicationId: result.rows[0].id,
+            applicantName: req.user.username,
+            message: `用户 ${req.user.username} 申请加入你的房间 ${roomId}`
+          }));
+        }
       }
-
-      fetch('register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, inviteCode })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.token) {
-          token = data.token;
-          localStorage.setItem('token', token);
-          
-          /* 解析用户名 */
-          const payload = JSON.parse(atob(token.split('.')[1]));
-          currentUsername = payload.username;
-          currentUsernameEl.textContent = currentUsername;
-          
-          enterChat();
-        } else {
-          showError(data.error || '注册失败');
-        }
-      })
-      .catch(() => showError('网络错误'));
     }
 
-    function login() {
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
-
-      if (!username || !password) {
-        showError('用户名密码不能为空！');
-        return;
-      }
-
-      fetch('login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.token) {
-          token = data.token;
-          localStorage.setItem('token', token);
-          
-          /* 解析用户名 */
-          const payload = JSON.parse(atob(token.split('.')[1]));
-          currentUsername = payload.username;
-          currentUsernameEl.textContent = currentUsername;
-          
-          /* 检查管理员权限 */
-          checkAdminStatus();
-          
-          enterChat();
-        } else {
-          showError(data.error || '登录失败');
-        }
-      })
-      .catch(() => showError('网络错误'));
-    }
-
-    function logout() {
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-      
-      localStorage.removeItem('token');
-      token = null;
-      
-      chatSection.classList.add('hidden');
-      authSection.classList.remove('hidden');
-      
-      /* 重置输入框 */
-      document.getElementById('username').value = '';
-      document.getElementById('password').value = '';
-      document.getElementById('inviteCode').value = '';
-      authMsg.textContent = '';
-      
-      /* 隐藏管理员面板 */
-      document.getElementById('adminPanel').classList.add('hidden');
-    }
-
-    function showError(message) {
-      authMsg.textContent = message;
-      setTimeout(() => {
-        if (authMsg.textContent === message) {
-          authMsg.textContent = '';
-        }
-      }, 5000);
-    }
-
-    /* ==================== 管理员功能 ==================== */
-    function checkAdminStatus() {
-      fetch('admin/invite-codes', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      .then(res => {
-        if (res.ok) {
-          document.getElementById('adminPanel').classList.remove('hidden');
-          loadInviteCodes();
-        }
-      })
-      .catch(() => {
-        /* 非管理员，不显示面板 */
-      });
-    }
-
-    /* 生成新邀请码 */
-    function generateInviteCode() {
-      fetch('admin/generate-invite', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      .then(res => res.json())
-      .then(data => {
-        const el = document.getElementById('newInviteCode');
-        el.innerHTML = `新邀请码 <span style="color:#9b59b6; font-size:18px;">${data.inviteCode}</span>`;
-        setTimeout(() => el.innerHTML = '', 10000); /* 10秒后清除 */
-        loadInviteCodes(); /* 刷新列表 */
-      })
-      .catch(err => {
-        console.error('生成邀请码错误', err);
-        showError('生成邀请码失败');
-      });
-    }
-
-    /* 加载邀请码列表 */
-    function loadInviteCodes() {
-      fetch('admin/invite-codes', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      .then(res => res.json())
-      .then(codes => {
-        let html = '<table><tr><th>邀请码</th><th>状态</th><th>创建时间</th><th>使用人</th></tr>';
-        
-        codes.forEach(code => {
-          const status = code.used ? 
-            `<span style="color:#27ae60;">已使用</span>` : 
-            `<span style="color:#e74c3c;">未使用</span>`;
-          
-          html += `<tr>
-            <td>${code.code}</td>
-            <td style="text-align:center;">${status}</td>
-            <td style="font-size:12px;">${formatDateTime(code.created_at)}</td>
-            <td>${code.used_by || '-'}</td>
-          </tr>`;
-        });
-        
-        html += '</table>';
-        document.getElementById('inviteCodesList').innerHTML = html;
-      })
-      .catch(err => {
-        console.error('加载邀请码错误', err);
-      });
-    }
-
-    /* 格式化日期时间 */
-    function formatDateTime(dateTimeStr) {
-      if (!dateTimeStr) return '';
-      
-      const date = new Date(dateTimeStr);
-      return `${date.getFullYear()}-${(date.getMonth()+1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-    }
-
-    /* ==================== 聊天功能 ==================== */
-
-    function enterChat() {
-      authSection.classList.add('hidden');
-      chatSection.classList.remove('hidden');
-      
-      /* 加载我的房间 */
-      loadMyRooms();
-      
-      /* 加载审核列表 */
-      loadApplications();
-
-      /* 连接 WebSocket */
-      connectWebSocket();
-    }
-
-    function connectWebSocket() {
-      if (ws) {
-        ws.close();
-      }
-
-      /* 修复：使用当前页面的完整 URL 作为 WebSocket 地址 */
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${window.location.host}?token=${token}`;
-      
-      console.log('尝试连接 WebSocket:', wsUrl); // 调试用
-      ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        console.log('WebSocket 连接成功');
-        messageInput.disabled = false;
-        sendBtn.disabled = false;
-      };
-
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        const chatBox = document.getElementById('chatBox');
-
-        if (data.type === 'system') {
-          const msgDiv = document.createElement('div');
-          msgDiv.className = 'system';
-          msgDiv.textContent = data.text;
-          chatBox.appendChild(msgDiv);
-        } 
-        else if (data.type === 'msg') {
-          const msgDiv = document.createElement('div');
-          msgDiv.className = 'msg';
-          
-          if (data.sender === currentUsername) {
-            msgDiv.innerHTML = `<div class="user-msg">
-              <strong>你</strong> (${data.time})：<br>${data.text}
-            </div>`;
-          } else {
-            msgDiv.innerHTML = `<div class="other-msg">
-              <strong>${data.sender}</strong> (${data.time})：<br>${data.text}
-            </div>`;
-          }
-          
-          chatBox.appendChild(msgDiv);
-        }
-        else if (data.type === 'new_application') {
-          /* 房主收到新申请通知 */
-          alert(`📩 有新申请！打开"审核中心"查看`);
-          loadApplications();
-        }
-        else if (data.type === 'application_approved') {
-          /* 申请被批准 */
-          joinWsRoom(data.roomDbId);
-          addSystemMessage('✅ 你的申请已批准！已加入房间');
-        }
-        else if (data.type === 'application_rejected') {
-          /* 申请被拒绝 */
-          addSystemMessage('❌ 你的申请已被拒绝');
-        }
-
-        /* 自动滚动到底部 */
-        chatBox.scrollTop = chatBox.scrollHeight;
-      };
-
-      ws.onclose = () => {
-        console.log('WebSocket 连接关闭');
-        messageInput.disabled = true;
-        sendBtn.disabled = true;
-        
-        /* 尝试重新连接（最多 3 次） */
-        setTimeout(() => {
-          if (!ws) connectWebSocket();
-        }, 3000);
-      };
-
-      ws.onerror = (error) => {
-        console.error('WebSocket 错误', error);
-        addSystemMessage('⚠️ 连接出现问题，请稍候重试');
-      };
-    }
-
-    function addSystemMessage(text) {
-      const chatBox = document.getElementById('chatBox');
-      const msgDiv = document.createElement('div');
-      msgDiv.className = 'system';
-      msgDiv.textContent = text;
-      chatBox.appendChild(msgDiv);
-      chatBox.scrollTop = chatBox.scrollHeight;
-    }
-
-    function joinRoom() {
-      const pwd = document.getElementById('roomPassword').value.trim();
-      if (!pwd) return alert('请输入房间密码！');
-
-      ws.send(JSON.stringify({ type: 'join', password: pwd }));
-      document.getElementById('roomPassword').value = '';
-    }
-
-    function joinWsRoom(roomIdHash) {
-      ws.send(JSON.stringify({ 
-        type: 'join-as-owner', 
-        roomIdHash: roomIdHash 
-      }));
-    }
-
-    function sendMessage() {
-      const text = messageInput.value.trim();
-      if (!text || !ws) return;
-
-      ws.send(JSON.stringify({ type: 'msg', text: text }));
-      messageInput.value = '';
-    }
-
-    /* ==================== 我的房间功能 ==================== */
-
-    // 统一的加载我的房间函数
-async function loadMyRooms() {
-  console.log('🔄 正在加载我的房间列表');
-  const token = localStorage.getItem('token');
-  if (!token) return;
-
-  try {
-    const response = await fetch('/my-rooms', {
-      headers: { 'Authorization': `Bearer ${token}` }
+    res.json({
+      message: '申请提交成功，等待房主审核',
+      applicationId: result.rows[0].id
     });
-
-    if (!response.ok) {
-      throw new Error(`HTTP错误: ${response.status}`);
-    }
-
-    const rooms = await response.json();
-    console.log('📊 后端返回的房间数据:', rooms); // 调试用日志
-
-    // 更新"我的房间"标签页列表
-    const myRoomsList = document.getElementById('myRoomsList');
-    if (rooms.length === 0) {
-      myRoomsList.innerHTML = '<p>你还没有创建任何房间 🎉</p>';
-    } else {
-      let html = '';
-      rooms.forEach(room => {
-        html += `
-          <div class="room-item">
-            <div class="room-id">房间ID ${room.roomId}</div>
-            <div class="room-meta">
-              <span>创建时间 ${formatDateTime(room.createdAt)}</span>
-              <span class="badge">待审核 ${room.pendingCount || 0}</span>
-            </div>
-            <button class="btn-small" onclick="copyRoomId('${room.roomId}')">复制房间号</button>
-            <button class="btn-small" onclick="enterMyRoom('${room.roomId}')">进入房间</button>
-          </div>
-        `;
-      });
-      myRoomsList.innerHTML = html;
-    }
-
-    // 更新dashboard房间列表（如果存在）
-    const roomList = document.getElementById('roomList');
-    if (roomList) {
-      if (rooms.length === 0) {
-        roomList.innerHTML = '<li>暂无房间，点击上方按钮创建吧！</li>';
-      } else {
-        let html = '';
-        rooms.forEach(room => {
-          html += `
-            <li>
-              📌 房间ID: <code>${room.roomId}</code>  
-              创建时间: ${new Date(room.createdAt).toLocaleString()}
-              <button onclick="copyRoomId('${room.roomId}')" style="margin-left:10px;">复制房间号</button>
-            </li>
-          `;
-        });
-        roomList.innerHTML = html;
-      }
-    }
   } catch (err) {
-    console.error('❌ 加载房间列表错误:', err);
-    document.getElementById('myRoomsList').innerHTML = '<p style="color:red;">加载房间失败，请刷新页面重试</p>';
-  }
-}
-
-    function enterMyRoom(roomIdHash) {
-      ws.send(JSON.stringify({
-        type: 'join-as-owner',
-        roomIdHash: roomIdHash
-      }));
-      
-      /* 切换到聊天标签页 */
-      switchTab('chat');
-    }
-
-    /* ==================== 审核中心功能 ==================== */
-
-    function loadApplications() {
-      fetch('my-applications', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      .then(r => r.json())
-      .then(apps => {
-        const list = document.getElementById('applicationsList');
-
-        if (apps.length === 0) {
-          list.innerHTML = '<p>暂无待审核申请</p>';
-          return;
-        }
-
-        let html = '';
-        apps.forEach(app => {
-          html += `
-            <div class="audit-item">
-              <div><strong>${app.applicant_name}</strong> 申请加入房间</div>
-              <div class="room-meta">
-                <span>申请时间 ${formatDateTime(app.created_at)}</span>
-              </div>
-              <div class="audit-actions">
-                <button class="btn-approve" onclick="approve(${app.id})">✅ 批准</button>
-                <button class="btn-reject" onclick="reject(${app.id})">❌ 拒绝</button>
-              </div>
-            </div>
-          `;
-        });
-        list.innerHTML = html;
-      })
-      .catch(err => {
-        console.error('加载申请错误', err);
-      });
-    }
-
-    function approve(appId) {
-      fetch(`applications/${appId}/approve`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      })
-      .then(() => loadApplications())
-      .catch(err => {
-        console.error('批准申请错误', err);
-        showError('批准失败');
-      });
-    }
-
-    function reject(appId) {
-      fetch(`applications/${appId}/reject`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      })
-      .then(() => loadApplications())
-      .catch(err => {
-        console.error('拒绝申请错误', err);
-        showError('拒绝失败');
-      });
-    }
-
-    /* ==================== 标签页切换 ==================== */
-
-    function switchTab(tabName) {
-      /* 更新标签样式 */
-      document.querySelectorAll('.nav-tab').forEach(tab => {
-        tab.classList.remove('active');
-      });
-      document.querySelector(`.nav-tab[data-tab="${tabName}"]`).classList.add('active');
-
-      /* 显示对应内容 */
-      document.querySelectorAll('.tab-content').forEach(content => {
-        content.classList.remove('active');
-      });
-      document.getElementById(`${tabName}Tab`).classList.add('active');
-
-      /* 特殊处理 */
-      if (tabName === 'audit') {
-        loadApplications();
-      } else if (tabName === 'myRooms') {
-        loadMyRooms();
-      }
-    }
-
-    /* ==================== 键盘事件 ==================== */
-
-    document.getElementById('messageInput').addEventListener('keypress', e => {
-      if (e.key === 'Enter') sendMessage();
-    });
-
-    document.getElementById('roomPassword').addEventListener('keypress', e => {
-      if (e.key === 'Enter') joinRoom();
-    });
-
-    document.getElementById('password').addEventListener('keypress', e => {
-      if (e.key === 'Enter') login();
-    });
-
-    document.getElementById('inviteCode').addEventListener('keypress', e => {
-      if (e.key === 'Enter') register();
-    });
-    // ====================== 1. 检查登录状态 ======================
-function checkLogin() {
-  const token = localStorage.getItem('token');
-  if (!token) {
-    // 未登录 → 显示登录框
-    document.getElementById('loginSection').style.display = 'block';
-    document.getElementById('dashboard').style.display = 'none';
-  } else {
-    // 已登录 → 显示仪表盘
-    try {
-      // 解码 JWT 获取用户名
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      document.getElementById('username').textContent = payload.username;
-      document.getElementById('dashboard').style.display = 'block';
-      document.getElementById('loginSection').style.display = 'none';
-
-      // 加载房间列表
-      loadMyRooms();
-    } catch (e) {
-      console.error('无效令牌', e);
-      localStorage.removeItem('token');
-      checkLogin(); // 重新检查
-    }
-  }
-}
-
-// 复制房间号到剪贴板
-function copyRoomId(roomId) {
-  navigator.clipboard.writeText(roomId).then(() => {
-    alert(`房间号已复制：${roomId}\n请分享给其他用户，让他们用此号申请加入！`);
-  });
-}
-
-// ====================== 3. 创建房间按钮事件 ======================
-document.getElementById('createRoomBtn').addEventListener('click', async () => {
-  const token = localStorage.getItem('token');
-  if (!token) return alert('请先登录！');
-
-  try {
-    const res = await fetch('/rooms', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
-
-    const data = await res.json();
-    if (res.ok) {
-      alert(`✅ 房间创建成功！\n\n你的房间号是：${data.roomId}\n\n请保存好此房间号，其他用户需要此号才能申请加入。`);
-      loadMyRooms(); // 刷新房间列表
-    } else {
-      alert(`❌ 失败：${data.error}`);
-    }
-  } catch (err) {
-    console.error(err);
-    alert('网络错误，请重试');
+    console.error('提交申请错误:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
-/* 创建房间功能 */
-async function createRoom() {
-  const token = localStorage.getItem('token');
-  if (!token) {
-    alert('请先登录!');
-    return;
-  }
-
+// 处理申请审批
+app.post('/rooms/:roomId/applications/:applicationId', authenticateJWT, async (req, res) => {
   try {
-    // 弹出输入框让用户输入房间名（可选）
-    const roomName = prompt('请输入房间名称（可选，默认随机命名）:', '');
-    if (roomName === null) return; // 用户取消
+    const { roomId, applicationId } = req.params;
+    const { action } = req.body;
 
-    const response = await fetch('/rooms', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        roomName: roomName || '我的聊天室' // 如果用户没输入，使用默认名
-      })
-    });
-
-    const data = await response.json();
-
-    if (response.ok) {
-      alert(`🎉 房间创建成功!\n房间ID: ${data.roomId}\n请保存好这个ID，其他用户需要它才能申请加入。`);
-      loadMyRooms(); // 刷新房间列表
-    } else {
-      alert(`❌ 创建失败: ${data.error || '未知错误'}`);
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ error: '无效的操作' });
     }
-  } catch (error) {
-    console.error('创建房间错误:', error);
-    alert('创建房间时发生错误，请重试。');
-  }
-}
-    async function applyToJoinRoom() {
-  const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
-  const joinError = document.getElementById('joinError');
 
-  if (!roomId) {
-    joinError.textContent = '请输入房间号';
-    return;
-  }
+    const db = getPool();
 
-  if (roomId.length < 6) {
-    joinError.textContent = '房间号格式不正确';
-    return;
-  }
+    // 检查是否是房间所有者
+    const roomResult = await db.query(
+      'SELECT id, owner_id FROM rooms WHERE room_id = $1',
+      [roomId]
+    );
 
-  try {
-    const response = await fetch(`/rooms/${roomId}/applications`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      }
-    });
+    if (roomResult.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在' });
+    }
 
-    const data = await response.json();
+    if (roomResult.rows[0].owner_id !== req.user.userId) {
+      return res.status(403).json({ error: '您无权处理这个房间的申请' });
+    }
 
-    if (response.ok) {
-      joinError.textContent = '';
-      document.getElementById('roomIdInput').value = '';
-      addSystemMessage(`✅ 申请提交成功！等待房主审核... (房间号: ${roomId})`);
+    // 获取申请信息
+    const appResult = await db.query(
+      'SELECT applicant_id FROM applications WHERE id = $1 AND room_id = $2',
+      [applicationId, roomResult.rows[0].id]
+    );
 
-      // 如果WebSocket连接正常，还可以发送通知
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'application_submitted',
-          roomId: roomId
+    if (appResult.rows.length === 0) {
+      return res.status(404).json({ error: '申请不存在或已处理' });
+    }
+
+    // 更新申请状态
+    const status = action === 'approve' ? 'approved' : 'rejected';
+    await db.query(
+      'UPDATE applications SET status = $1 WHERE id = $2',
+      [status, applicationId]
+    );
+
+    // 通知申请人
+    const applicantId = appResult.rows[0].applicant_id;
+    if (userConnections.has(applicantId)) {
+      const applicantSocket = userConnections.get(applicantId);
+      if (applicantSocket.readyState === WebSocket.OPEN) {
+        applicantSocket.send(JSON.stringify({
+          type: `application_${status}`,
+          roomId: roomId,
+          message: `你申请加入房间 ${roomId} 的请求已被${status === 'approved' ? '通过' : '拒绝'}`
         }));
       }
-    } else {
-      joinError.textContent = data.error || '申请失败';
     }
-  } catch (error) {
-    console.error('申请加入房间错误:', error);
-    joinError.textContent = '网络错误，请重试';
+
+    res.json({
+      message: `申请已${status === 'approved' ? '通过' : '拒绝'}`
+    });
+  } catch (err) {
+    console.error('处理申请错误:', err.message);
+    res.status(500).json({ error: err.message });
   }
-}
-// ====================== 4. 页面加载时检查登录状态 ======================
-window.addEventListener('DOMContentLoaded', checkLogin);
-  </script>
-</body>
-</html>
+});
+// ======== 16. 启动！ ========
+startServer();
