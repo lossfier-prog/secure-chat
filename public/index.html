@@ -1051,49 +1051,75 @@ async function loadMyRooms() {
 
       try {
         let allApplications = [];
+        let errors = [];
 
         // 1. 获取用户作为房主需要审核的申请
-        const roomsResponse = await fetch('/my-rooms', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        
-        if (roomsResponse.ok) {
-          const rooms = await roomsResponse.json();
+        try {
+          const roomsResponse = await fetch('/my-rooms', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
           
-          // 为每个房间获取待审核的申请
-          for (const room of rooms) {
-            const appsResponse = await fetch(`/rooms/${room.roomId}/applications`, {
-              headers: { 'Authorization': `Bearer ${token}` }
-            });
+          if (roomsResponse.ok) {
+            const rooms = await roomsResponse.json();
+            
+            // 为每个房间获取待审核的申请
+            for (const room of rooms) {
+              try {
+                const appsResponse = await fetch(`/rooms/${room.roomId}/applications`, {
+                  headers: { 'Authorization': `Bearer ${token}` }
+                });
 
-            if (appsResponse.ok) {
-              const apps = await appsResponse.json();
-              // 为每个申请添加房间信息
-              apps.forEach(app => {
-                app.roomId = room.roomId;
-                app.type = 'toReview'; // 标记为需要审核的申请
-              });
-              allApplications = [...allApplications, ...apps];
+                if (appsResponse.ok) {
+                  const apps = await appsResponse.json();
+                  // 为每个申请添加房间信息
+                  apps.forEach(app => {
+                    app.roomId = room.roomId;
+                    app.type = 'toReview'; // 标记为需要审核的申请
+                  });
+                  allApplications = [...allApplications, ...apps];
+                }
+              } catch (roomErr) {
+                console.error(`获取房间 ${room.roomId} 申请失败`, roomErr);
+                errors.push(`房间 ${room.roomId} 申请获取失败`);
+              }
             }
+          } else {
+            console.error('获取房间列表失败', roomsResponse.status);
+            errors.push('房间列表获取失败');
           }
+        } catch (err) {
+          console.error('获取房间列表错误', err);
+          errors.push('房间列表获取失败');
         }
 
         // 2. 获取用户自己提交的申请
-        const myAppsResponse = await fetch('/my-applications', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        
-        if (myAppsResponse.ok) {
-          const myApps = await myAppsResponse.json();
-          // 为每个申请添加类型标记
-          myApps.forEach(app => {
-            app.type = 'myApplication'; // 标记为自己的申请
+        try {
+          const myAppsResponse = await fetch('/my-applications', {
+            headers: { 'Authorization': `Bearer ${token}` }
           });
-          allApplications = [...allApplications, ...myApps];
+          
+          if (myAppsResponse.ok) {
+            const myApps = await myAppsResponse.json();
+            // 为每个申请添加类型标记
+            myApps.forEach(app => {
+              app.type = 'myApplication'; // 标记为自己的申请
+            });
+            allApplications = [...allApplications, ...myApps];
+          } else {
+            console.error('获取自己的申请失败', myAppsResponse.status);
+            errors.push('个人申请获取失败');
+          }
+        } catch (err) {
+          console.error('获取自己的申请错误', err);
+          errors.push('个人申请获取失败');
         }
 
         if (allApplications.length === 0) {
-          list.innerHTML = '<p>暂无申请</p>';
+          if (errors.length > 0) {
+            list.innerHTML = `<p>加载申请时遇到错误：${errors.join('、')}</p><p>部分申请可能未显示</p>`;
+          } else {
+            list.innerHTML = '<p>暂无申请</p>';
+          }
           return;
         }
 
@@ -1104,13 +1130,32 @@ async function loadMyRooms() {
 
         let html = '';
         allApplications.forEach(app => {
+          // 安全的时间格式化函数
+          const formatTime = (timeStr) => {
+            if (!timeStr) return '未知时间';
+            try {
+              const date = new Date(timeStr);
+              if (isNaN(date.getTime())) return timeStr;
+              return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+              });
+            } catch (e) {
+              return timeStr;
+            }
+          };
+
           if (app.type === 'toReview') {
             // 需要审核的申请
             html += `
               <div class="audit-item">
                 <div><strong>${app.username}</strong> 申请加入房间 ${app.roomId}</div>
                 <div class="room-meta">
-                  <span>申请时间 ${formatDateTime(app.created_at)}</span>
+                  <span>申请时间 ${formatTime(app.created_at)}</span>
                 </div>
                 <div class="audit-actions">
                   <button class="btn-approve" onclick="approve(${app.id})">✅ 批准</button>
@@ -1124,17 +1169,22 @@ async function loadMyRooms() {
               <div class="audit-item">
                 <div>你申请加入房间 ${app.room_id}</div>
                 <div class="room-meta">
-                  <span>申请时间 ${formatDateTime(app.created_at)}</span>
+                  <span>申请时间 ${formatTime(app.created_at)}</span>
                   <span>状态: ${app.status === 'pending' ? '待审核' : app.status === 'approved' ? '已批准' : '已拒绝'}</span>
                 </div>
               </div>
             `;
           }
         });
+        
+        if (errors.length > 0) {
+          html = `<div style="color: #ff6b6b; margin-bottom: 10px;">加载时遇到错误：${errors.join('、')}</div>` + html;
+        }
+        
         list.innerHTML = html;
       } catch (err) {
         console.error('加载申请错误', err);
-        list.innerHTML = '<p>加载申请失败，请刷新页面</p>';
+        list.innerHTML = `<p>加载申请失败：${err.message}</p><p>请刷新页面重试</p>`;
       }
     }
 
