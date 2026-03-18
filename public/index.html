@@ -301,8 +301,7 @@
         
         <div style="margin-top: 15px;">
   <input type="text" id="roomIdInput" placeholder="输入房间号（例如ABC12345）">
-  <input type="password" id="roomPasswordInput" placeholder="输入房间密码">
-  <button onclick="joinRoomWithPassword()">加入房间</button>
+  <button onclick="joinRoom()">加入房间</button>
   <div class="error" id="joinError" style="margin-top: 5px;"></div>
 </div>
 
@@ -1189,7 +1188,7 @@ document.getElementById('createRoomBtn').addEventListener('click', async () => {
 
     const data = await res.json();
     if (res.ok) {
-      alert(`✅ 房间创建成功！\n\n房间号：${data.roomId}\n房间密码：${data.password}\n\n请保存好房间号和密码，其他用户需要它们才能加入。`);
+      alert(`✅ 房间创建成功！\n\n房间号：${data.roomId}\n\n请保存好房间号，其他用户需要它才能加入。`);
       loadMyRooms(); // 刷新房间列表
     } else {
       alert(`❌ 失败：${data.error}`);
@@ -1226,7 +1225,7 @@ async function createRoom() {
     const data = await response.json();
 
     if (response.ok) {
-      alert(`🎉 房间创建成功!\n房间ID: ${data.roomId}\n房间密码: ${data.password}\n请保存好房间号和密码，其他用户需要它们才能加入。`);
+      alert(`🎉 房间创建成功!\n房间ID: ${data.roomId}\n请保存好房间号，其他用户需要它才能加入。`);
       loadMyRooms(); // 刷新房间列表
     } else {
       alert(`❌ 创建失败: ${data.error || '未知错误'}`);
@@ -1236,18 +1235,12 @@ async function createRoom() {
     alert('创建房间时发生错误，请重试。');
   }
 }
-    async function joinRoomWithPassword() {
+    async function joinRoom() {
   const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
-  const password = document.getElementById('roomPasswordInput').value.trim();
   const joinError = document.getElementById('joinError');
 
   if (!roomId) {
     joinError.textContent = '请输入房间号';
-    return;
-  }
-
-  if (!password) {
-    joinError.textContent = '请输入房间密码';
     return;
   }
 
@@ -1262,8 +1255,7 @@ async function createRoom() {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({ password })
+      }
     });
 
     const data = await response.json();
@@ -1271,7 +1263,6 @@ async function createRoom() {
     if (response.ok) {
       joinError.textContent = '';
       document.getElementById('roomIdInput').value = '';
-      document.getElementById('roomPasswordInput').value = '';
       addSystemMessage(`✅ 加入房间成功！(房间号: ${roomId})`);
     } else {
       joinError.textContent = data.error || '加入失败';
