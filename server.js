@@ -359,18 +359,21 @@ app.get('*', (req, res) => {
 // 房间管理 — 认证后可用
 // ======================================================
 
-// 创建新房间
-app.post('/rooms', authenticateToken, async (req, res) => {
-  console.log(`🏠 用户 ${req.user.username} 创建房间`);
+// 创建新房间（仅管理员）
+app.post('/rooms', authenticateToken, adminOnly, async (req, res) => {
+  console.log(`🏠 管理员 ${req.user.username} 创建房间`);
   try {
     const db = getPool();
     const roomId = generateRoomId();   // 生成唯一房间号
+    // 生成8位随机密码
+    const roomPassword = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const passwordHash = await bcrypt.hash(roomPassword, SALT_ROUNDS);
 
     const result = await db.query(
-      `INSERT INTO rooms (room_id, owner_id) 
-       VALUES ($1, $2) 
+      `INSERT INTO rooms (room_id, owner_id, password_hash) 
+       VALUES ($1, $2, $3) 
        RETURNING id, room_id`,
-      [roomId, req.user.userId]
+      [roomId, req.user.userId, passwordHash]
     );
 
     // 自动将创建者加入房间成员
@@ -383,7 +386,8 @@ app.post('/rooms', authenticateToken, async (req, res) => {
     res.json({
       id: result.rows[0].id,
       roomId: result.rows[0].room_id,
-      message: "房间创建成功！其他用户可用该房间号申请加入。"
+      password: roomPassword,
+      message: "房间创建成功！请将房间号和密码分享给需要加入的用户。"
     });
 
   } catch (err) {
@@ -437,6 +441,55 @@ app.delete('/rooms/:roomId', authenticateToken, roomOwnerOnly, async (req, res) 
     res.status(500).json({ error: '删除房间失败: ' + err.message });
   }
 });
+
+// 加入房间（使用密码）
+app.post('/rooms/:roomId/join', authenticateToken, async (req, res) => {
+  console.log(`📩 用户 ${req.user.username} 加入房间 ${req.params.roomId}`);
+  try {
+    const db = getPool();
+    const { roomId } = req.params;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: '请提供房间密码' });
+    }
+
+    // 1. 检查房间是否存在
+    const room = await db.query('SELECT id, password_hash FROM rooms WHERE room_id = $1', [roomId]);
+    if (room.rows.length === 0) {
+      return res.status(404).json({ error: '房间不存在！' });
+    }
+    const roomDbId = room.rows[0].id;
+    const passwordHash = room.rows[0].password_hash;
+
+    // 2. 验证密码
+    if (!passwordHash || !(await bcrypt.compare(password, passwordHash))) {
+      return res.status(401).json({ error: '密码错误！' });
+    }
+
+    // 3. 检查用户是否已经是房间成员
+    const existingMember = await db.query(
+      'SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2',
+      [roomDbId, req.user.userId]
+    );
+    if (existingMember.rows.length > 0) {
+      return res.status(400).json({ error: '您已经是该房间的成员' });
+    }
+
+    // 4. 将用户加入房间
+    await db.query(
+      `INSERT INTO room_members (room_id, user_id) 
+       VALUES ($1, $2)`,
+      [roomDbId, req.user.userId]
+    );
+
+    res.json({ message: '加入房间成功！' });
+
+  } catch (err) {
+    console.error('❌ 加入房间错误:', err.message);
+    res.status(500).json({ error: '加入房间失败: ' + err.message });
+  }
+});
 // ======== 10. 错误处理 ========
 app.use((err, req, res, next) => {
   console.error('💥 服务器错误:', err.message);
@@ -444,172 +497,7 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: '服务器内部错误' });
   }
 });
-// 申请加入某个房间
-app.post('/rooms/:roomId/join', authenticateToken, async (req, res) => {
-  console.log(`📩 用户 ${req.user.username} 申请加入房间 ${req.params.roomId}`);
-  try {
-    const db = getPool();
-    const { roomId } = req.params;
 
-    // 1. 检查房间是否存在
-    const room = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
-    if (room.rows.length === 0) {
-      return res.status(404).json({ error: '房间不存在！' });
-    }
-    const roomDbId = room.rows[0].id;
-
-    // 2. 避免重复申请
-    const existApp = await db.query(
-      `SELECT id FROM applications 
-       WHERE room_id = $1 AND applicant_id = $2 AND status = 'pending'`,
-      [roomDbId, req.user.userId]
-    );
-    if (existApp.rows.length > 0) {
-      return res.status(400).json({ error: '您已提交申请，请耐心等待审核' });
-    }
-
-    // 3. 创建申请记录
-    await db.query(
-      `INSERT INTO applications (room_id, applicant_id) 
-       VALUES ($1, $2)`,
-      [roomDbId, req.user.userId]
-    );
-
-    res.json({ message: '申请已提交！房间所有者会尽快审核。' });
-
-  } catch (err) {
-    console.error('❌ 申请加入错误:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-// 获取该房间的所有 pending 申请 （仅房间所有者）
-app.get('/rooms/:roomId/applications', 
-  authenticateToken, 
-  roomOwnerOnly, 
-  async (req, res) => 
-{
-  console.log(`📋 房间 ${req.params.roomId} 申请列表`);
-  try {
-    const db = getPool();
-    const { roomId } = req.params;
-
-    // 先查找房间的数据库ID
-    const roomResult = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
-    if (roomResult.rows.length === 0) {
-      return res.status(404).json({ error: '房间不存在' });
-    }
-    const roomDbId = roomResult.rows[0].id;
-
-    const applications = await db.query(`
-      SELECT 
-        a.id, 
-        a.status,
-        u.id AS user_id,
-        u.username,
-        a.created_at
-      FROM applications a
-      JOIN users u ON a.applicant_id = u.id
-      WHERE a.room_id = $1 AND a.status = 'pending'
-      ORDER BY a.created_at DESC
-    `, [roomDbId]);
-
-    res.json(applications.rows);
-  } catch (err) {
-    console.error('❌ 获取申请列表错误:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-// 批准某条申请
-app.post('/applications/:appId/approve', 
-  authenticateToken, 
-  async (req, res) => 
-{
-  console.log(`✅ 批准申请 ${req.params.appId}`);
-  try {
-    const db = getPool();
-    const { appId } = req.params;
-
-    // 1. 获取申请详情
-    const app = await db.query(
-      `SELECT room_id, applicant_id 
-       FROM applications 
-       WHERE id = $1 AND status = 'pending'`,
-      [appId]
-    );
-    
-    if (app.rows.length === 0) {
-      return res.status(404).json({ error: '申请不存在或已处理' });
-    }
-
-    const { room_id, applicant_id } = app.rows[0];
-
-    // 2. 验证操作者是房间所有者
-    const room = await db.query('SELECT owner_id FROM rooms WHERE id = $1', [room_id]);
-    if (room.rows[0].owner_id !== req.user.userId) {
-      return res.status(403).json({ error: '无权操作该申请！' });
-    }
-
-    // 3. 更新申请状态 + 加入房间成员
-    await db.query('BEGIN');
-    await db.query(
-      `UPDATE applications SET status = 'approved' WHERE id = $1`,
-      [appId]
-    );
-    await db.query(
-      `INSERT INTO room_members (room_id, user_id) 
-       VALUES ($1, $2) 
-       ON CONFLICT DO NOTHING`,   // 避免重复加入
-      [room_id, applicant_id]
-    );
-    await db.query('COMMIT');
-
-    res.json({ message: '申请已批准，用户已加入房间！' });
-
-  } catch (err) {
-    await db.query('ROLLBACK');
-    console.error('❌ 批准申请错误:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-// 拒绝某条申请
-app.post('/applications/:appId/reject', 
-  authenticateToken, 
-  async (req, res) => 
-{
-  console.log(`❌ 拒绝申请 ${req.params.appId}`);
-  try {
-    const db = getPool();
-    const { appId } = req.params;
-
-    // 检查申请是否存在且为 pending
-    const app = await db.query(
-      `SELECT room_id FROM applications 
-       WHERE id = $1 AND status = 'pending'`,
-      [appId]
-    );
-    
-    if (app.rows.length === 0) {
-      return res.status(404).json({ error: '申请不存在或已处理' });
-    }
-
-    // 验证操作者是房间所有者
-    const room = await db.query('SELECT owner_id FROM rooms WHERE id = $1', [app.rows[0].room_id]);
-    if (room.rows[0].owner_id !== req.user.userId) {
-      return res.status(403).json({ error: '无权操作该申请！' });
-    }
-
-    await db.query(
-      `UPDATE applications SET status = 'rejected' WHERE id = $1`,
-      [appId]
-    );
-
-    res.json({ message: '申请已拒绝' });
-
-  } catch (err) {
-    console.error('❌ 拒绝申请错误:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // 获取房间历史消息
 app.get('/rooms/:roomId/messages', authenticateToken, async (req, res) => {
@@ -706,35 +594,8 @@ wss.on('connection', (socket, req) => {
 
       console.log(`📨 收到消息 (${username}):`, data.type);
 
-      // 处理加入房间申请通知
-      if (data.type === 'application_submitted' && data.roomId) {
-        const db = getPool();
-
-        // 查找该房间的所有者
-        const roomResult = await db.query(
-          'SELECT owner_id FROM rooms WHERE room_id = $1',
-          [data.roomId]
-        );
-
-        if (roomResult.rows.length > 0) {
-          const ownerId = roomResult.rows[0].owner_id;
-
-          // 查找房主是否在线
-          if (userConnections.has(ownerId)) {
-            const ownerSocket = userConnections.get(ownerId);
-            if (ownerSocket.readyState === WebSocket.OPEN) {
-              ownerSocket.send(JSON.stringify({
-                type: 'new_application',
-                roomId: data.roomId,
-                applicantName: username,
-                message: `用户 ${username} 申请加入房间 ${data.roomId}`
-              }));
-            }
-          }
-        }
-      }
       // 处理其他消息类型...
-      else if (data.type === 'chatMessage') {
+      if (data.type === 'chatMessage') {
         // 存储消息到数据库
         const db = getPool();
         if (db) {
@@ -797,29 +658,7 @@ wss.on('connection', (socket, req) => {
     }
   });
 });
-wss.onmessage = (event) => {
-  try {
-    const data = JSON.parse(event.data);
-    const chatBox = document.getElementById('chatBox');
 
-    // 已有的消息处理...
-
-    // 添加审核结果通知处理
-    if (data.type === 'application_approved') {
-      addSystemMessage(`✅ 你的申请已通过！已加入房间 ${data.roomId}`);
-      // 可选：自动加入房间
-    }
-    else if (data.type === 'application_rejected') {
-      addSystemMessage(`❌ 你的申请已被拒绝: ${data.message || ''}`);
-    }
-    else if (data.type === 'new_application') {
-      addSystemMessage(`📩 收到新申请: ${data.message}`);
-      loadApplications(); // 刷新申请列表
-    }
-  } catch (err) {
-    console.error('处理消息错误:', err);
-  }
-};
 // 广播消息到房间
 async function broadcastToRoom(roomId, message) {
   if (!roomId) return;
@@ -881,6 +720,7 @@ async function initDatabase() {
         id SERIAL PRIMARY KEY,
         room_id TEXT UNIQUE NOT NULL,
         owner_id INTEGER REFERENCES users(id),
+        password_hash TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -936,6 +776,12 @@ console.log('   • messages 表就绪');
 await db.query(`
   ALTER TABLE applications 
   ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
+`);
+
+// 为rooms表添加password_hash字段
+await db.query(`
+  ALTER TABLE rooms 
+  ADD COLUMN IF NOT EXISTS password_hash TEXT
 `);
     console.log('✅ 数据库初始化完成');
     return true;
@@ -1001,147 +847,6 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('💥 未处理的 Promise 拒绝:', reason);
 });
-// 提交加入房间申请
-app.post('/rooms/:roomId/applications', authenticateJWT, async (req, res) => {
-  try {
-    const { roomId } = req.params;
-    const db = getPool();
 
-    // 检查房间是否存在
-    const roomResult = await db.query(
-      'SELECT id FROM rooms WHERE room_id = $1',
-      [roomId]
-    );
-
-    if (roomResult.rows.length === 0) {
-      return res.status(404).json({ error: '房间不存在' });
-    }
-
-    const roomIdNum = roomResult.rows[0].id;
-
-    // 检查是否已经创建过这个房间
-    const ownerCheck = await db.query(
-      'SELECT * FROM rooms WHERE room_id = $1 AND owner_id = $2',
-      [roomId, req.user.userId]
-    );
-
-    if (ownerCheck.rows.length > 0) {
-      return res.status(400).json({ error: '不能申请加入自己创建的房间' });
-    }
-
-    // 检查是否已经申请过
-    const existingApplication = await db.query(
-      'SELECT * FROM applications WHERE room_id = $1 AND applicant_id = $2',
-      [roomIdNum, req.user.userId]
-    );
-
-    if (existingApplication.rows.length > 0) {
-      return res.status(400).json({ error: '您已经申请过该房间' });
-    }
-
-    // 创建申请
-    const result = await db.query(
-      `INSERT INTO applications
-      (room_id, applicant_id, status)
-      VALUES ($1, $2, $3)
-      RETURNING id, created_at`,
-      [roomIdNum, req.user.userId, 'pending']
-    );
-
-    // 通知房主（如果在线）
-    const ownerResult = await db.query(
-      'SELECT owner_id FROM rooms WHERE id = $1',
-      [roomIdNum]
-    );
-
-    if (ownerResult.rows.length > 0) {
-      const ownerId = ownerResult.rows[0].owner_id;
-      if (userConnections.has(ownerId)) {
-        const ownerSocket = userConnections.get(ownerId);
-        if (ownerSocket.readyState === WebSocket.OPEN) {
-          ownerSocket.send(JSON.stringify({
-            type: 'new_application',
-            roomId: roomId,
-            applicationId: result.rows[0].id,
-            applicantName: req.user.username,
-            message: `用户 ${req.user.username} 申请加入你的房间 ${roomId}`
-          }));
-        }
-      }
-    }
-
-    res.json({
-      message: '申请提交成功，等待房主审核',
-      applicationId: result.rows[0].id
-    });
-  } catch (err) {
-    console.error('提交申请错误:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-// 处理申请审批
-app.post('/rooms/:roomId/applications/:applicationId', authenticateJWT, async (req, res) => {
-  try {
-    const { roomId, applicationId } = req.params;
-    const { action } = req.body;
-
-    if (!['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ error: '无效的操作' });
-    }
-
-    const db = getPool();
-
-    // 检查是否是房间所有者
-    const roomResult = await db.query(
-      'SELECT id, owner_id FROM rooms WHERE room_id = $1',
-      [roomId]
-    );
-
-    if (roomResult.rows.length === 0) {
-      return res.status(404).json({ error: '房间不存在' });
-    }
-
-    if (roomResult.rows[0].owner_id !== req.user.userId) {
-      return res.status(403).json({ error: '您无权处理这个房间的申请' });
-    }
-
-    // 获取申请信息
-    const appResult = await db.query(
-      'SELECT applicant_id FROM applications WHERE id = $1 AND room_id = $2',
-      [applicationId, roomResult.rows[0].id]
-    );
-
-    if (appResult.rows.length === 0) {
-      return res.status(404).json({ error: '申请不存在或已处理' });
-    }
-
-    // 更新申请状态
-    const status = action === 'approve' ? 'approved' : 'rejected';
-    await db.query(
-      'UPDATE applications SET status = $1 WHERE id = $2',
-      [status, applicationId]
-    );
-
-    // 通知申请人
-    const applicantId = appResult.rows[0].applicant_id;
-    if (userConnections.has(applicantId)) {
-      const applicantSocket = userConnections.get(applicantId);
-      if (applicantSocket.readyState === WebSocket.OPEN) {
-        applicantSocket.send(JSON.stringify({
-          type: `application_${status}`,
-          roomId: roomId,
-          message: `你申请加入房间 ${roomId} 的请求已被${status === 'approved' ? '通过' : '拒绝'}`
-        }));
-      }
-    }
-
-    res.json({
-      message: `申请已${status === 'approved' ? '通过' : '拒绝'}`
-    });
-  } catch (err) {
-    console.error('处理申请错误:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
 // ======== 16. 启动！ ========
 startServer();
