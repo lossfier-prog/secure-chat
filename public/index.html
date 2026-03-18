@@ -1029,8 +1029,10 @@ async function loadMyRooms() {
 }
 
     function enterMyRoom(roomId) {
-      // 更新房间号输入框
-      document.getElementById('roomIdInput').value = roomId;
+      // 更新房间号输入框并设置为不可输入
+      const roomIdInput = document.getElementById('roomIdInput');
+      roomIdInput.value = roomId;
+      roomIdInput.disabled = true;
       
       /* 切换到聊天标签页 */
       switchTab('chat');
@@ -1249,6 +1251,7 @@ async function createRoom() {
     async function joinRoom() {
   const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
   const joinError = document.getElementById('joinError');
+  const roomIdInput = document.getElementById('roomIdInput');
 
   if (!roomId) {
     joinError.textContent = '请输入房间号';
@@ -1273,7 +1276,9 @@ async function createRoom() {
 
     if (response.ok) {
       joinError.textContent = '';
-      document.getElementById('roomIdInput').value = '';
+      // 设置输入框为不可输入，并显示当前房间号
+      roomIdInput.value = roomId;
+      roomIdInput.disabled = true;
       addSystemMessage(`✅ 加入房间成功！(房间号: ${roomId})`);
     } else {
       joinError.textContent = data.error || '加入失败';
