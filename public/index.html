@@ -892,6 +892,9 @@ function formatDateTime(dateTimeStr) {
             msgDiv.innerHTML = `<div class="other-msg">
               <strong>${data.from}</strong> (${new Date(data.timestamp).toLocaleTimeString()})：<br>${data.message}
             </div>`;
+            
+            // 显示浏览器通知
+            showNotification(data.from, data.message);
           }
           
           chatBox.appendChild(msgDiv);
@@ -926,6 +929,36 @@ function formatDateTime(dateTimeStr) {
       msgDiv.textContent = text;
       chatBox.appendChild(msgDiv);
       chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function showNotification(sender, message) {
+      // 检查浏览器是否支持通知
+      if (!('Notification' in window)) {
+        console.log('此浏览器不支持桌面通知');
+        return;
+      }
+      
+      // 检查是否有权限
+      if (Notification.permission === 'granted') {
+        // 创建通知
+        const notification = new Notification('新消息', {
+          body: `${sender}: ${message.substring(0, 30)}${message.length > 30 ? '...' : ''}`,
+          icon: '/favicon.ico'
+        });
+        
+        // 点击通知跳转到聊天页面
+        notification.onclick = function() {
+          window.focus();
+          this.close();
+        };
+      } else if (Notification.permission !== 'denied') {
+        // 请求权限
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') {
+            showNotification(sender, message);
+          }
+        });
+      }
     }
 
     function joinRoom() {
