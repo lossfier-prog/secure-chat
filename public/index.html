@@ -875,17 +875,17 @@ function formatDateTime(dateTimeStr) {
           msgDiv.textContent = data.text;
           chatBox.appendChild(msgDiv);
         } 
-        else if (data.type === 'msg') {
+        else if (data.type === 'chatMessage') {
           const msgDiv = document.createElement('div');
           msgDiv.className = 'msg';
           
-          if (data.sender === currentUsername) {
+          if (data.from === currentUsername) {
             msgDiv.innerHTML = `<div class="user-msg">
-              <strong>你</strong> (${data.time})：<br>${data.text}
+              <strong>你</strong> (${new Date(data.timestamp).toLocaleTimeString()})：<br>${data.message}
             </div>`;
           } else {
             msgDiv.innerHTML = `<div class="other-msg">
-              <strong>${data.sender}</strong> (${data.time})：<br>${data.text}
+              <strong>${data.from}</strong> (${new Date(data.timestamp).toLocaleTimeString()})：<br>${data.message}
             </div>`;
           }
           
@@ -942,7 +942,14 @@ function formatDateTime(dateTimeStr) {
       const text = messageInput.value.trim();
       if (!text || !ws) return;
 
-      ws.send(JSON.stringify({ type: 'msg', text: text }));
+      // 从输入框获取房间号
+      const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
+      if (!roomId) {
+        alert('请先加入一个房间');
+        return;
+      }
+
+      ws.send(JSON.stringify({ type: 'chatMessage', roomId: roomId, message: text }));
       messageInput.value = '';
     }
 
