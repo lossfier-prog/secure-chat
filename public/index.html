@@ -467,15 +467,15 @@ async function loadMyRooms() {
     rooms.forEach(room => {
       html += `
         <div class="room-item">
-          <div class="room-id">${room.is_owner ? '🏠 ' : '👥 '}房间号: ${room.roomId}</div>
+          <div class="room-id">${room.is_owner ? '🏠 ' : '👥 '}房间号: ${room.room_id}</div>
           <div class="room-meta">
-            <span>创建于: ${formatDateTime(room.createdAt)}</span>
+            <span>创建于: ${formatDateTime(room.created_at)}</span>
             <span>${room.is_owner ? '（房主）' : '（成员）'}</span>
           </div>
           <div style="display: flex; gap: 10px; margin-top: 10px;">
-            <button class="btn-small" onclick="copyRoomId('${room.roomId}')">复制房间号</button>
-            <button class="btn-small" onclick="enterMyRoom('${room.roomId}')">进入房间</button>
-            ${room.is_owner ? `<button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.roomId}')">删除房间</button>` : ''}
+            <button class="btn-small" onclick="copyRoomId('${room.room_id}')">复制房间号</button>
+            <button class="btn-small" onclick="enterMyRoom('${room.room_id}')">进入房间</button>
+            ${room.is_owner ? `<button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.room_id}')">删除房间</button>` : ''}
           </div>
         </div>
       `;
@@ -1028,11 +1028,9 @@ async function loadMyRooms() {
   }
 }
 
-    function enterMyRoom(roomIdHash) {
-      ws.send(JSON.stringify({
-        type: 'join-as-owner',
-        roomIdHash: roomIdHash
-      }));
+    function enterMyRoom(roomId) {
+      // 更新房间号输入框
+      document.getElementById('roomIdInput').value = roomId;
       
       /* 切换到聊天标签页 */
       switchTab('chat');
@@ -1132,15 +1130,15 @@ async function loadRoomManagement() {
     rooms.forEach(room => {
       html += `
         <div class="room-item">
-          <div class="room-id">${room.is_owner ? '🏠 ' : '👥 '}房间号: ${room.roomId}</div>
+          <div class="room-id">${room.is_owner ? '🏠 ' : '👥 '}房间号: ${room.room_id}</div>
           <div class="room-meta">
-            <span>创建于: ${formatDateTime(room.createdAt)}</span>
+            <span>创建于: ${formatDateTime(room.created_at)}</span>
             <span>${room.is_owner ? '（房主）' : '（成员）'}</span>
           </div>
           <div style="display: flex; gap: 10px; margin-top: 10px;">
-            <button class="btn-small" onclick="copyRoomId('${room.roomId}')">复制房间号</button>
-            <button class="btn-small" onclick="enterMyRoom('${room.roomId}')">进入房间</button>
-            ${room.is_owner ? `<button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.roomId}')">删除房间</button>` : ''}
+            <button class="btn-small" onclick="copyRoomId('${room.room_id}')">复制房间号</button>
+            <button class="btn-small" onclick="enterMyRoom('${room.room_id}')">进入房间</button>
+            ${room.is_owner ? `<button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.room_id}')">删除房间</button>` : ''}
           </div>
         </div>
       `;
