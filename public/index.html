@@ -315,8 +315,8 @@
 <div id="myRoomsTab" class="tab-content">
   <h3>🏠 我的房间</h3>
 
-  <!-- 添加创建房间按钮 -->
-  <div style="margin-bottom: 20px;">
+  <!-- 添加创建房间按钮（仅管理员可见） -->
+  <div id="createRoomButton" style="margin-bottom: 20px; display: none;">
     <button onclick="createRoom()" style="padding: 10px 20px; width: 100%; background: #4CAF50;">
       📦 创建新房间
     </button>
@@ -389,8 +389,13 @@ function checkAuth() {
       currentUsernameEl.textContent = currentUsername;
 
       // 检查管理员权限
-      if (payload.role === 'admin' && document.getElementById('adminPanel')) {
-        document.getElementById('adminPanel').classList.remove('hidden');
+      if (payload.role === 'admin') {
+        if (document.getElementById('adminPanel')) {
+          document.getElementById('adminPanel').classList.remove('hidden');
+        }
+        if (document.getElementById('createRoomButton')) {
+          document.getElementById('createRoomButton').style.display = 'block';
+        }
       }
 
       // 显示聊天区域，隐藏认证区域
@@ -451,8 +456,8 @@ async function loadMyRooms() {
     if (rooms.length === 0) {
       list.innerHTML = `
         <div class="card">
-          <p>你还没有创建任何房间 🎉</p>
-          <button onclick="createRoom()" style="margin-top: 10px;">立即创建房间</button>
+          <p>你还没有加入任何房间 🎉</p>
+          <p>请在聊天页面输入房间号加入一个房间</p>
         </div>
       `;
       return;
@@ -462,15 +467,15 @@ async function loadMyRooms() {
     rooms.forEach(room => {
       html += `
         <div class="room-item">
-          <div class="room-id">房间号: ${room.roomId}</div>
+          <div class="room-id">${room.is_owner ? '🏠 ' : '👥 '}房间号: ${room.roomId}</div>
           <div class="room-meta">
             <span>创建于: ${formatDateTime(room.createdAt)}</span>
-            ${room.pendingCount > 0 ? `<span class="badge">${room.pendingCount} 个待审核</span>` : ''}
+            <span>${room.is_owner ? '（房主）' : '（成员）'}</span>
           </div>
           <div style="display: flex; gap: 10px; margin-top: 10px;">
             <button class="btn-small" onclick="copyRoomId('${room.roomId}')">复制房间号</button>
-            <button class="btn-small" onclick="enterMyRoom('${room.roomId}')">进入管理</button>
-            <button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.roomId}')">删除房间</button>
+            <button class="btn-small" onclick="enterMyRoom('${room.roomId}')">进入房间</button>
+            ${room.is_owner ? `<button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.roomId}')">删除房间</button>` : ''}
           </div>
         </div>
       `;
@@ -1116,8 +1121,8 @@ async function loadRoomManagement() {
     if (rooms.length === 0) {
       content.innerHTML = `
         <div class="card">
-          <p>你还没有创建任何房间 🎉</p>
-          <button onclick="createRoom()" style="margin-top: 10px;">立即创建房间</button>
+          <p>你还没有加入任何房间 🎉</p>
+          <p>请在聊天页面输入房间号加入一个房间</p>
         </div>
       `;
       return;
@@ -1127,14 +1132,15 @@ async function loadRoomManagement() {
     rooms.forEach(room => {
       html += `
         <div class="room-item">
-          <div class="room-id">房间号: ${room.roomId}</div>
+          <div class="room-id">${room.is_owner ? '🏠 ' : '👥 '}房间号: ${room.roomId}</div>
           <div class="room-meta">
             <span>创建于: ${formatDateTime(room.createdAt)}</span>
+            <span>${room.is_owner ? '（房主）' : '（成员）'}</span>
           </div>
           <div style="display: flex; gap: 10px; margin-top: 10px;">
             <button class="btn-small" onclick="copyRoomId('${room.roomId}')">复制房间号</button>
             <button class="btn-small" onclick="enterMyRoom('${room.roomId}')">进入房间</button>
-            <button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.roomId}')">删除房间</button>
+            ${room.is_owner ? `<button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.roomId}')">删除房间</button>` : ''}
           </div>
         </div>
       `;
