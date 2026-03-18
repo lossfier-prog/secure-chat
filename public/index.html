@@ -981,21 +981,21 @@ async function loadMyRooms() {
     // 更新"我的房间"标签页列表
     const myRoomsList = document.getElementById('myRoomsList');
     if (rooms.length === 0) {
-        myRoomsList.innerHTML = '<p>你还没有创建任何房间 🎉</p>';
+        myRoomsList.innerHTML = '<p>你还没有加入任何房间 🎉</p>';
       } else {
         let html = '';
         rooms.forEach(room => {
           html += `
             <div class="room-item">
-              <div class="room-id">房间ID ${room.roomId}</div>
+              <div class="room-id">${room.is_owner ? '🏠 ' : '👥 '}房间号: ${room.room_id}</div>
               <div class="room-meta">
-                <span>创建时间 ${formatDateTime(room.createdAt)}</span>
-                <span class="badge">待审核 ${room.pendingCount || 0}</span>
+                <span>创建于: ${formatDateTime(room.created_at)}</span>
+                <span>${room.is_owner ? '（房主）' : '（成员）'}</span>
               </div>
               <div style="display: flex; gap: 10px; margin-top: 10px;">
-                <button class="btn-small" onclick="copyRoomId('${room.roomId}')">复制房间号</button>
-                <button class="btn-small" onclick="enterMyRoom('${room.roomId}')">进入房间</button>
-                <button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.roomId}')">删除房间</button>
+                <button class="btn-small" onclick="copyRoomId('${room.room_id}')">复制房间号</button>
+                <button class="btn-small" onclick="enterMyRoom('${room.room_id}')">进入房间</button>
+                ${room.is_owner ? `<button class="btn-small" style="background: #e74c3c;" onclick="deleteRoom('${room.room_id}')">删除房间</button>` : ''}
               </div>
             </div>
           `;
@@ -1013,9 +1013,9 @@ async function loadMyRooms() {
         rooms.forEach(room => {
           html += `
             <li>
-              📌 房间ID: <code>${room.roomId}</code>  
-              创建时间: ${new Date(room.createdAt).toLocaleString()}
-              <button onclick="copyRoomId('${room.roomId}')" style="margin-left:10px;">复制房间号</button>
+              📌 房间ID: <code>${room.room_id}</code>  
+              创建时间: ${new Date(room.created_at).toLocaleString()}
+              <button onclick="copyRoomId('${room.room_id}')" style="margin-left:10px;">复制房间号</button>
             </li>
           `;
         });
