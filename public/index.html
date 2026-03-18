@@ -1036,6 +1036,9 @@ async function loadMyRooms() {
       
       /* 切换到聊天标签页 */
       switchTab('chat');
+      
+      // 加载历史消息
+      loadRoomMessages(roomId);
     }
 
     /* ==================== 审核中心功能 ==================== */
@@ -1248,6 +1251,50 @@ async function createRoom() {
     alert('创建房间时发生错误，请重试。');
   }
 }
+    async function loadRoomMessages(roomId) {
+  try {
+    const response = await fetch(`/rooms/${roomId}/messages`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error('加载消息失败');
+    }
+
+    const messages = await response.json();
+    const chatBox = document.getElementById('chatBox');
+    
+    // 清空聊天框
+    chatBox.innerHTML = '';
+    
+    // 添加历史消息
+    messages.forEach(msg => {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'msg';
+      
+      if (msg.username === currentUsername) {
+        msgDiv.innerHTML = `<div class="user-msg">
+          <strong>你</strong> (${new Date(msg.created_at).toLocaleTimeString()})：<br>${msg.content}
+        </div>`;
+      } else {
+        msgDiv.innerHTML = `<div class="other-msg">
+          <strong>${msg.username}</strong> (${new Date(msg.created_at).toLocaleTimeString()})：<br>${msg.content}
+        </div>`;
+      }
+      
+      chatBox.appendChild(msgDiv);
+    });
+    
+    // 自动滚动到底部
+    chatBox.scrollTop = chatBox.scrollHeight;
+  } catch (error) {
+    console.error('加载历史消息错误:', error);
+    addSystemMessage('⚠️ 加载历史消息失败');
+  }
+}
+
     async function joinRoom() {
   const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
   const joinError = document.getElementById('joinError');
@@ -1280,6 +1327,8 @@ async function createRoom() {
       roomIdInput.value = roomId;
       roomIdInput.disabled = true;
       addSystemMessage(`✅ 加入房间成功！(房间号: ${roomId})`);
+      // 加载历史消息
+      loadRoomMessages(roomId);
     } else {
       joinError.textContent = data.error || '加入失败';
     }
