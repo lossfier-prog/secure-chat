@@ -365,15 +365,12 @@ app.post('/rooms', authenticateToken, adminOnly, async (req, res) => {
   try {
     const db = getPool();
     const roomId = generateRoomId();   // 生成唯一房间号
-    // 生成8位随机密码
-    const roomPassword = Math.random().toString(36).substring(2, 10).toUpperCase();
-    const passwordHash = await bcrypt.hash(roomPassword, SALT_ROUNDS);
 
     const result = await db.query(
-      `INSERT INTO rooms (room_id, owner_id, password_hash) 
-       VALUES ($1, $2, $3) 
+      `INSERT INTO rooms (room_id, owner_id) 
+       VALUES ($1, $2) 
        RETURNING id, room_id`,
-      [roomId, req.user.userId, passwordHash]
+      [roomId, req.user.userId]
     );
 
     // 自动将创建者加入房间成员
@@ -386,8 +383,7 @@ app.post('/rooms', authenticateToken, adminOnly, async (req, res) => {
     res.json({
       id: result.rows[0].id,
       roomId: result.rows[0].room_id,
-      password: roomPassword,
-      message: "房间创建成功！请将房间号和密码分享给需要加入的用户。"
+      message: "房间创建成功！请将房间号分享给需要加入的用户。"
     });
 
   } catch (err) {
@@ -442,32 +438,21 @@ app.delete('/rooms/:roomId', authenticateToken, roomOwnerOnly, async (req, res) 
   }
 });
 
-// 加入房间（使用密码）
+// 加入房间（直接通过房间号）
 app.post('/rooms/:roomId/join', authenticateToken, async (req, res) => {
   console.log(`📩 用户 ${req.user.username} 加入房间 ${req.params.roomId}`);
   try {
     const db = getPool();
     const { roomId } = req.params;
-    const { password } = req.body;
-
-    if (!password) {
-      return res.status(400).json({ error: '请提供房间密码' });
-    }
 
     // 1. 检查房间是否存在
-    const room = await db.query('SELECT id, password_hash FROM rooms WHERE room_id = $1', [roomId]);
+    const room = await db.query('SELECT id FROM rooms WHERE room_id = $1', [roomId]);
     if (room.rows.length === 0) {
       return res.status(404).json({ error: '房间不存在！' });
     }
     const roomDbId = room.rows[0].id;
-    const passwordHash = room.rows[0].password_hash;
 
-    // 2. 验证密码
-    if (!passwordHash || !(await bcrypt.compare(password, passwordHash))) {
-      return res.status(401).json({ error: '密码错误！' });
-    }
-
-    // 3. 检查用户是否已经是房间成员
+    // 2. 检查用户是否已经是房间成员
     const existingMember = await db.query(
       'SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2',
       [roomDbId, req.user.userId]
@@ -476,7 +461,7 @@ app.post('/rooms/:roomId/join', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '您已经是该房间的成员' });
     }
 
-    // 4. 将用户加入房间
+    // 3. 将用户加入房间
     await db.query(
       `INSERT INTO room_members (room_id, user_id) 
        VALUES ($1, $2)`,
