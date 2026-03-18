@@ -229,35 +229,33 @@ app.post('/login', async (req, res) => {
     res.status(500).json({ error: '登录失败: ' + err.message });
   }
 });
-//获取房间列表
+//获取房间列表（包括创建的和加入的）
 app.get('/my-rooms', authenticateToken, async (req, res) => {
   console.log('🏠 获取房间列表');
   try {
     const db = getPool();
-    // 按创建时间倒序，最新创建的房间排在最前面
-    const result = await db.query(
-      `SELECT id, room_id, created_at FROM rooms 
-       WHERE owner_id = $1 
-       ORDER BY created_at DESC`,
+    
+    // 获取用户创建的房间
+    const createdRooms = await db.query(
+      `SELECT r.id, r.room_id, r.created_at, TRUE as is_owner FROM rooms r 
+       WHERE r.owner_id = $1 
+       ORDER BY r.created_at DESC`,
       [req.user.userId]
     );
-
-    // 同时查询每个房间的待审核申请数量
-    const roomsWithPending = await Promise.all(result.rows.map(async room => {
-      const pendingRes = await db.query(
-        `SELECT COUNT(*) FROM applications 
-         WHERE room_id = $1 AND status = 'pending'`,
-        [room.id]
-      );
-      return {
-        id: room.id,
-        roomId: room.room_id,
-        createdAt: room.created_at,
-        pendingCount: parseInt(pendingRes.rows[0].count)
-      };
-    }));
-
-    res.json(roomsWithPending);
+    
+    // 获取用户加入的房间
+    const joinedRooms = await db.query(
+      `SELECT r.id, r.room_id, r.created_at, FALSE as is_owner FROM rooms r
+       JOIN room_members rm ON r.id = rm.room_id
+       WHERE rm.user_id = $1 AND r.owner_id != $1
+       ORDER BY r.created_at DESC`,
+      [req.user.userId]
+    );
+    
+    // 合并并去重
+    const allRooms = [...createdRooms.rows, ...joinedRooms.rows];
+    
+    res.json(allRooms);
   } catch (err) {
     console.error('❌ 获取房间错误:', err.message);
     res.status(500).json({ error: err.message });
